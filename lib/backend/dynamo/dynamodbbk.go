@@ -52,6 +52,10 @@ type DynamoConfig struct {
 	ReadCapacityUnits int64 `json:"read_capacity_units"`
 	// WriteCapacityUnits is Dynamodb write capacity units
 	WriteCapacityUnits int64 `json:"write_capacity_units"`
+	// Endpoint required if want to use dynalite
+	Endpoint string `json:"endpoint,omitempty"`
+	// DisableDBTTL, TimeToLive must disabled if using dynalite (because not supported yet)
+	DisableDBTTL bool `json:"disable_db_ttl,omitempty"`
 }
 
 // CheckAndSetDefaults is a helper returns an error if the supplied configuration
@@ -161,6 +165,9 @@ func New(params backend.Params) (backend.Backend, error) {
 		creds := credentials.NewStaticCredentials(cfg.AccessKey, cfg.SecretKey, "")
 		sess.Config.Credentials = creds
 	}
+	if cfg.Endpoint != "" {
+		sess.Config.Endpoint = aws.String(cfg.Endpoint)
+	}
 
 	// create DynamoDB service:
 	b.svc = dynamodb.New(sess)
@@ -181,9 +188,12 @@ func New(params backend.Params) (backend.Backend, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	err = b.turnOnTimeToLive()
-	if err != nil {
-		return nil, trace.Wrap(err)
+
+	if !cfg.DisableDBTTL {
+		err = b.turnOnTimeToLive()
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
 	}
 	return b, nil
 }
