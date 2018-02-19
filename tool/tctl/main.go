@@ -23,6 +23,7 @@ import (
 func main() {
 	commands := []common.CLICommand{
 		&common.UserCommand{},
+		&common.RoleCommand{},
 		&common.NodeCommand{},
 		&common.TokenCommand{},
 		&common.AuthCommand{},
