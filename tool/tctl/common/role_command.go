@@ -38,7 +38,6 @@ type RoleCommand struct {
 	name          string
 	allowedLogins string
 	nodeLabels    string
-	roles         string
 	identities    []string
 	ttl           time.Duration
 
@@ -55,15 +54,17 @@ func (u *RoleCommand) Initialize(app *kingpin.Application, config *service.Confi
 
 	u.roleAdd = roles.Command("add", "Create a role")
 	u.roleAdd.Arg("name", "Teleport role name").Required().StringVar(&u.name)
-	u.roleAdd.Arg("local-logins", "Local UNIX user this role can log in").
+	u.roleAdd.Arg("logins", "Local UNIX user this role can log in").
 		Required().StringVar(&u.allowedLogins)
 	u.roleAdd.Arg("node-labels", "Node labels this role can log in").
 		Required().StringVar(&u.nodeLabels)
 
 	u.roleUpdate = roles.Command("update", "Update properties for existing role").Hidden()
-	u.roleUpdate.Arg("login", "Teleport role login").Required().StringVar(&u.name)
-	u.roleUpdate.Flag("set-roles", "Roles to assign to this role").
-		Default("").StringVar(&u.roles)
+	u.roleUpdate.Arg("name", "Teleport role login").Required().StringVar(&u.name)
+	u.roleUpdate.Flag("set-logins", "Login to assign to this role").
+		Default("").StringVar(&u.allowedLogins)
+	u.roleUpdate.Flag("set-node-labels", "Node labels to assign to this role").
+		Default("").StringVar(&u.nodeLabels)
 
 	u.roleList = roles.Command("ls", "List all role accounts")
 
@@ -99,8 +100,8 @@ func (u *RoleCommand) Add(client auth.ClientI) error {
 	}
 	nodeLabels := make(map[string]string, 0)
 	for _, pair := range strings.Split(u.nodeLabels, " ") {
-		k := strings.Split(pair, "=")[0]
-		v := strings.Split(pair, "=")[1]
+		k := strings.Split(pair, ":")[0]
+		v := strings.Split(pair, ":")[1]
 		nodeLabels[k] = v
 	}
 
@@ -132,28 +133,39 @@ func (u *RoleCommand) Add(client auth.ClientI) error {
 
 // Update updates existing role
 func (u *RoleCommand) Update(client auth.ClientI) error {
-	// role, err := client.GetUser(u.login)
-	// if err != nil {
-	// 	return trace.Wrap(err)
-	// }
-	// roles := strings.Split(u.roles, ",")
-	// for _, role := range roles {
-	// 	if _, err := client.GetRole(role); err != nil {
-	// 		return trace.Wrap(err)
-	// 	}
-	// }
-	// role.SetRoles(roles)
-	// if err := client.UpsertUser(role); err != nil {
-	// 	return trace.Wrap(err)
-	// }
-	// fmt.Printf("%v has been updated with roles %v\n", role.GetName(), strings.Join(role.GetRoles(), ","))
+	role, err := client.GetRole(u.name)
+	if err != nil {
+		fmt.Println("Role not found")
+		return err
+	}
+
+	if u.allowedLogins != "" {
+		role.SetLogins(services.Allow, strings.Split(u.allowedLogins, ","))
+		fmt.Printf("updating logins")
+	}
+
+	if u.nodeLabels != "" {
+		nodeLabels := make(map[string]string, 0)
+		for _, pair := range strings.Split(u.nodeLabels, " ") {
+			k := strings.Split(pair, ":")[0]
+			v := strings.Split(pair, ":")[1]
+			nodeLabels[k] = v
+		}
+		role.SetNodeLabels(services.Allow, nodeLabels)
+	}
+
+	err = client.UpsertRole(role, time.Minute)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Role '%s' has been updated!\n", u.name)
 	return nil
 }
 
 // List prints all existing user accounts
 func (u *RoleCommand) List(client auth.ClientI) error {
 	roles, err := client.GetRoles()
-	fmt.Printf("roles = %+v\n", roles)
 	if err != nil {
 		return trace.Wrap(err)
 	}
