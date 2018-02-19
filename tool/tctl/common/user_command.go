@@ -162,7 +162,6 @@ func (u *UserCommand) List(client *auth.TunClient) error {
 	}
 	t := asciitable.MakeTable([]string{"User", "Role", "Logins", "Env"})
 	for _, u := range users {
-		// logins, _ := u.GetTraits()[teleport.TraitLogins]
 		roles := u.GetRoles()
 		if len(roles) == 0 {
 			t.AddRow([]string{u.GetName(), "-- No Roles --"})
@@ -175,7 +174,8 @@ func (u *UserCommand) List(client *auth.TunClient) error {
 
 				r, err := client.GetRole(roleName)
 				if err != nil {
-					return trace.Wrap(err)
+					fmt.Printf("Warning: role `%s` for user `%s` not found\n", roleName, u.GetName())
+					continue
 				}
 
 				nodeLabels := make([]string, 0)
