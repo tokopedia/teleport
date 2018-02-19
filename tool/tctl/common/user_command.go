@@ -56,6 +56,8 @@ func (u *UserCommand) Initialize(app *kingpin.Application, config *service.Confi
 	u.userAdd.Arg("account", "Teleport user account name").Required().StringVar(&u.login)
 	u.userAdd.Arg("local-logins", "Local UNIX users this account can log in as [login]").
 		Default("").StringVar(&u.allowedLogins)
+	u.userAdd.Flag("set-roles", "Roles to assign to this user").
+		Required().StringVar(&u.roles)
 	u.userAdd.Flag("ttl", fmt.Sprintf("Set expiration time for token, default is %v hour, maximum is %v hours",
 		int(defaults.SignupTokenTTL/time.Hour), int(defaults.MaxSignupTokenTTL/time.Hour))).
 		Default(fmt.Sprintf("%v", defaults.SignupTokenTTL)).DurationVar(&u.ttl)
@@ -101,6 +103,15 @@ func (u *UserCommand) Add(client auth.ClientI) error {
 		Name:          u.login,
 		AllowedLogins: strings.Split(u.allowedLogins, ","),
 	}
+
+	roles := strings.Split(u.roles, ",")
+	for _, role := range roles {
+		if _, err := client.GetRole(role); err != nil {
+			return trace.Wrap(err)
+		}
+	}
+	user.Roles = roles
+
 	token, err := client.CreateSignupToken(user, u.ttl)
 	if err != nil {
 		return err
