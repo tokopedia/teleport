@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/gravitational/kingpin"
+	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/asciitable"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/defaults"
@@ -34,8 +35,9 @@ import (
 // It implements CLICommand interface
 type RoleCommand struct {
 	config        *service.Config
-	login         string
+	name          string
 	allowedLogins string
+	nodeLabels    string
 	roles         string
 	identities    []string
 	ttl           time.Duration
@@ -51,17 +53,15 @@ func (u *RoleCommand) Initialize(app *kingpin.Application, config *service.Confi
 	u.config = config
 	roles := app.Command("roles", "Manage role accounts")
 
-	u.roleAdd = roles.Command("add", "Generate a role invitation token")
-	u.roleAdd.Arg("account", "Teleport role account name").Required().StringVar(&u.login)
-	u.roleAdd.Arg("local-logins", "Local UNIX roles this account can log in as [login]").
-		Default("").StringVar(&u.allowedLogins)
-	u.roleAdd.Flag("ttl", fmt.Sprintf("Set expiration time for token, default is %v hour, maximum is %v hours",
-		int(defaults.SignupTokenTTL/time.Hour), int(defaults.MaxSignupTokenTTL/time.Hour))).
-		Default(fmt.Sprintf("%v", defaults.SignupTokenTTL)).DurationVar(&u.ttl)
-	u.roleAdd.Alias(AddUserHelp)
+	u.roleAdd = roles.Command("add", "Create a role")
+	u.roleAdd.Arg("name", "Teleport role name").Required().StringVar(&u.name)
+	u.roleAdd.Arg("local-logins", "Local UNIX user this role can log in").
+		Required().StringVar(&u.allowedLogins)
+	u.roleAdd.Arg("node-labels", "Node labels this role can log in").
+		Required().StringVar(&u.nodeLabels)
 
 	u.roleUpdate = roles.Command("update", "Update properties for existing role").Hidden()
-	u.roleUpdate.Arg("login", "Teleport role login").Required().StringVar(&u.login)
+	u.roleUpdate.Arg("login", "Teleport role login").Required().StringVar(&u.name)
 	u.roleUpdate.Flag("set-roles", "Roles to assign to this role").
 		Default("").StringVar(&u.roles)
 
@@ -69,7 +69,7 @@ func (u *RoleCommand) Initialize(app *kingpin.Application, config *service.Confi
 
 	u.roleDelete = roles.Command("rm", "Deletes role accounts").Alias("del")
 	u.roleDelete.Arg("logins", "Comma-separated list of role logins to delete").
-		Required().StringVar(&u.login)
+		Required().StringVar(&u.name)
 }
 
 // TryRun takes the CLI command as an argument (like "roles add") and executes it.
@@ -89,24 +89,44 @@ func (u *RoleCommand) TryRun(cmd string, client auth.ClientI) (match bool, err e
 	return true, trace.Wrap(err)
 }
 
-// Add creates a new sign-up token and prints a token URL to stdout.
-// A role is not created until he visits the sign-up URL and completes the process
+// Add creates a role.
 func (u *RoleCommand) Add(client auth.ClientI) error {
-	// if no local logins were specified, default to 'login'
-	// if u.allowedLogins == "" {
-	// 	u.allowedLogins = u.login
-	// }
-	// role := services.UserV1{
-	// 	Name:          u.login,
-	// 	AllowedLogins: strings.Split(u.allowedLogins, ","),
-	// }
-	// token, err := client.CreateSignupToken(role, u.ttl)
-	// if err != nil {
-	// 	return err
-	// }
+	// check if role already exists or not
+	existedRole, _ := client.GetRole(u.name)
+	if existedRole != nil {
+		fmt.Printf("Role %s already exists", u.name)
+		return nil
+	}
+	nodeLabels := make(map[string]string, 0)
+	for _, pair := range strings.Split(u.nodeLabels, " ") {
+		k := strings.Split(pair, "=")[0]
+		v := strings.Split(pair, "=")[1]
+		nodeLabels[k] = v
+	}
 
-	// // try to auto-suggest the activation link
-	// u.PrintSignupURL(client, token, u.ttl)
+	role, _ := services.NewRole(
+		u.name,
+		services.RoleSpecV3{
+			Options: services.RoleOptions{
+				services.CertificateFormat: teleport.CertificateFormatStandard,
+				services.MaxSessionTTL:     services.NewDuration(defaults.CertDuration),
+				services.PortForwarding:    true,
+				services.ForwardAgent:      true,
+			},
+			Allow: services.RoleConditions{
+				Namespaces: []string{defaults.Namespace},
+				NodeLabels: nodeLabels,
+				Rules:      services.CopyRulesSlice(services.AdminUserRules),
+			},
+		},
+	)
+	role.SetLogins(services.Allow, strings.Split(u.allowedLogins, ","))
+	err := client.UpsertRole(role, time.Minute)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Role '%s' has been created!\n", u.name)
 	return nil
 }
 
@@ -149,20 +169,19 @@ func (u *RoleCommand) List(client auth.ClientI) error {
 		for k, v := range r.GetNodeLabels(services.Allow) {
 			labels = append(labels, k+":"+v)
 		}
-		t.AddRow([]string{r.GetName(), strings.Join(logins, ","), strings.Join(labels, ",")})
+		t.AddRow([]string{r.GetName(), strings.Join(logins, ","), strings.Join(labels, " ")})
 	}
 	fmt.Println(t.AsBuffer().String())
 	return nil
 }
 
-// Delete deletes teleport user(s). User IDs are passed as a comma-separated
-// list in RoleCommand.login
+// Delete deletes teleport role(s). Role Names are passed as a comma-separated
 func (u *RoleCommand) Delete(client auth.ClientI) error {
-	// for _, l := range strings.Split(u.login, ",") {
-	// 	if err := client.DeleteUser(l); err != nil {
-	// 		return trace.Wrap(err)
-	// 	}
-	// 	fmt.Printf("User '%v' has been deleted\n", l)
-	// }
+	for _, l := range strings.Split(u.name, ",") {
+		if err := client.DeleteRole(l); err != nil {
+			return trace.Wrap(err)
+		}
+		fmt.Printf("Role '%v' has been deleted\n", l)
+	}
 	return nil
 }
