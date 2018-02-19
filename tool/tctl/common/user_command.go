@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/gravitational/kingpin"
-	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/asciitable"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/defaults"
@@ -150,10 +149,36 @@ func (u *UserCommand) List(client auth.ClientI) error {
 		fmt.Println("No users found")
 		return nil
 	}
-	t := asciitable.MakeTable([]string{"User", "Allowed logins"})
+	t := asciitable.MakeTable([]string{"User", "Role", "Logins", "Env"})
 	for _, u := range users {
-		logins, _ := u.GetTraits()[teleport.TraitLogins]
-		t.AddRow([]string{u.GetName(), strings.Join(logins, ",")})
+		// logins, _ := u.GetTraits()[teleport.TraitLogins]
+		roles := u.GetRoles()
+		if len(roles) == 0 {
+			t.AddRow([]string{u.GetName(), "-- No Roles --"})
+		} else {
+			userName := u.GetName()
+			for i, roleName := range roles {
+				if i > 0 {
+					userName = ""
+				}
+
+				r, err := client.GetRole(roleName)
+				if err != nil {
+					return trace.Wrap(err)
+				}
+
+				nodeLabels := make([]string, 0)
+				for k, v := range r.GetNodeLabels(services.Allow) {
+					nodeLabels = append(nodeLabels, k+":"+v)
+				}
+				t.AddRow([]string{
+					userName,
+					r.GetName(),
+					strings.Join(r.GetLogins(services.Allow), ","),
+					strings.Join(nodeLabels, " "),
+				})
+			}
+		}
 	}
 	fmt.Println(t.AsBuffer().String())
 	return nil
