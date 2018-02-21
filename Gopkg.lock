@@ -47,9 +47,27 @@
   revision = "fe0f26ff6d26693948ee8189aa064ee8c54141fa"
 
 [[projects]]
+  name = "github.com/cenkalti/backoff"
+  packages = ["."]
+  revision = "61153c768f31ee5f130071d08fc82b85208528de"
+  version = "v1.1.0"
+
+[[projects]]
+  name = "github.com/cespare/xxhash"
+  packages = ["."]
+  revision = "5c37fe3735342a2e0d01c87a907579987c8936cc"
+  version = "v1.0.0"
+
+[[projects]]
   name = "github.com/codahale/hdrhistogram"
   packages = ["."]
   revision = "954f16e8b9ef0e5d5189456aa4c1202758e04f17"
+
+[[projects]]
+  name = "github.com/coocood/freecache"
+  packages = ["."]
+  revision = "f3233c8095b26cd0dea0b136b931708c05defa08"
+  version = "v1.0.1"
 
 [[projects]]
   name = "github.com/coreos/etcd"
@@ -111,7 +129,7 @@
 
 [[projects]]
   name = "github.com/golang/protobuf"
-  packages = ["jsonpb","proto","protoc-gen-go/descriptor","ptypes/any","ptypes/empty"]
+  packages = ["proto","protoc-gen-go/descriptor","ptypes/any","ptypes/empty"]
   revision = "8ee79997227bf9b34611aee7946ae64735e6fd93"
 
 [[projects]]
@@ -169,7 +187,7 @@
 
 [[projects]]
   name = "github.com/grpc-ecosystem/grpc-gateway"
-  packages = ["runtime","runtime/internal","third_party/googleapis/google/api","utilities"]
+  packages = ["third_party/googleapis/google/api"]
   revision = "a8f25bd1ab549f8b87afd48aa9181221e9d439bb"
   version = "v1.1.0"
 
@@ -401,6 +419,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "524e883afcbde8a816f2a8f79f83f6d21108450220141d189232b38566edaa35"
+  inputs-digest = "f3c7a8f60bf74d83c852b3b5814657fc27cbde815990a119f32d85b5bae3b2bb"
   solver-name = "gps-cdcl"
   solver-version = 1

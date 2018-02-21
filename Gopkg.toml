@@ -151,3 +151,7 @@ ignored = ["github.com/Sirupsen/logrus"]
 [[constraint]]
   name = "github.com/gravitational/license"
   version = "0.0.4"
+
+[[constraint]]
+  name = "github.com/coocood/freecache"
+  version = "1.0.1"

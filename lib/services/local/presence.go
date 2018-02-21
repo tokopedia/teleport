@@ -18,9 +18,12 @@ package local
 
 import (
 	"encoding/json"
+	"math/rand"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/gravitational/teleport/cache"
 	"github.com/gravitational/teleport/lib/backend"
 	"github.com/gravitational/teleport/lib/services"
 
@@ -134,13 +137,25 @@ func (s *PresenceService) getServers(kind, prefix string) ([]services.Server, er
 	}
 	servers := make([]services.Server, 0, len(keys))
 	for _, key := range keys {
-		data, err := s.GetVal([]string{prefix}, key)
-		if err != nil {
-			if trace.IsNotFound(err) {
-				continue
+		// check cache first
+		cacheKey := strings.Join([]string{prefix, key}, ".")
+		data, err := cache.Get(cacheKey)
+
+		if len(data) == 0 {
+			data, err := s.GetVal([]string{prefix}, key)
+			if err != nil {
+				if trace.IsNotFound(err) {
+					continue
+				}
+				return nil, trace.Wrap(err)
+			} else {
+				// if got data, keep in cache
+				expire := 60 + rand.Intn(60)
+				expire = 10
+				cache.Set(cacheKey, data, expire)
 			}
-			return nil, trace.Wrap(err)
 		}
+
 		server, err := services.GetServerMarshaler().UnmarshalServer(data, kind)
 		if err != nil {
 			return nil, trace.Wrap(err)
