@@ -665,9 +665,9 @@ func (s *sessionCache) ValidateSession(user, sid string) (*SessionContext, error
 	}
 
 	userRoles := make([]services.Role, 0)
-	userObj, _ := userClient.GetUser(user)
+	userObj, _ := clt.GetUser(user)
 	for _, role := range userObj.GetRoles() {
-		roleObj, _ := userClient.GetRole(role)
+		roleObj, _ := clt.GetRole(role)
 		userRoles = append(userRoles, roleObj)
 	}
 
