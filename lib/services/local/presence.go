@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gravitational/teleport/cache"
 	"github.com/gravitational/teleport/lib/backend"
+	"github.com/gravitational/teleport/lib/cache"
 	"github.com/gravitational/teleport/lib/services"
 
 	"github.com/gravitational/trace"
