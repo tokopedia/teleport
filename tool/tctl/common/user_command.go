@@ -25,6 +25,7 @@ import (
 	"github.com/gravitational/teleport/lib/asciitable"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/defaults"
+	"github.com/gravitational/teleport/lib/notif"
 	"github.com/gravitational/teleport/lib/service"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/web"
@@ -38,6 +39,7 @@ type UserCommand struct {
 	login         string
 	allowedLogins string
 	roles         string
+	email         string
 	identities    []string
 	ttl           time.Duration
 
@@ -61,6 +63,8 @@ func (u *UserCommand) Initialize(app *kingpin.Application, config *service.Confi
 	u.userAdd.Flag("ttl", fmt.Sprintf("Set expiration time for token, default is %v hour, maximum is %v hours",
 		int(defaults.SignupTokenTTL/time.Hour), int(defaults.MaxSignupTokenTTL/time.Hour))).
 		Default(fmt.Sprintf("%v", defaults.SignupTokenTTL)).DurationVar(&u.ttl)
+	u.userAdd.Flag("email", "Email to send the invitation link").
+		Required().StringVar(&u.email)
 	u.userAdd.Alias(AddUserHelp)
 
 	u.userUpdate = users.Command("update", "Update properties for existing user").Hidden()
@@ -119,6 +123,11 @@ func (u *UserCommand) Add(client *auth.TunClient) error {
 
 	// try to auto-suggest the activation link
 	u.PrintSignupURL(client, token, u.ttl)
+
+	if u.config.EnableEmailToken {
+		notif.SendRegistrationLink(u.config, user, u.email, token)
+	}
+
 	return nil
 }
 

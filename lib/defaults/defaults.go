@@ -90,7 +90,7 @@ const (
 	ReadHeadersTimeout = time.Second
 
 	// SignupTokenTTL is a default TTL for a web signup one time token
-	SignupTokenTTL = time.Hour
+	SignupTokenTTL = 24 * time.Hour
 
 	// MaxSignupTokenTTL is a maximum TTL for a web signup one time token
 	// clients can reduce this time, not increase it
