@@ -231,6 +231,18 @@ func ApplyFileConfig(fc *FileConfig, cfg *service.Config) error {
 	}
 	cfg.CachePolicy = *cachePolicy
 
+	smtp, err := fc.SMTP.Parse()
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	cfg.SMTP = *smtp
+
+	// TODO(klizhentas): Removed on sasha/ha?
+	// TODO(ekontsevoy): I would advise against it. syslog is the only logger which works with scp
+	if strings.ToLower(fc.Logger.Output) == "syslog" {
+		utils.SwitchLoggingtoSyslog()
+	}
+
 	// apply ciphers, kex algorithms, and mac algorithms
 	if fc.Ciphers != nil {
 		cfg.Ciphers = fc.Ciphers
@@ -240,6 +252,14 @@ func ApplyFileConfig(fc *FileConfig, cfg *service.Config) error {
 	}
 	if fc.MACAlgorithms != nil {
 		cfg.MACAlgorithms = fc.MACAlgorithms
+	}
+
+	if fc.EnableEmailToken != nil {
+		cfg.EnableEmailToken = *fc.EnableEmailToken
+	}
+
+	if fc.ProxyHost != "" {
+		cfg.ProxyHost = fc.ProxyHost
 	}
 
 	// apply connection throttling:

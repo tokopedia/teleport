@@ -154,6 +154,15 @@ type Config struct {
 
 	// ShutdownTimeout is set to override default shutdown timeout.
 	ShutdownTimeout time.Duration
+
+	// Send invitation token link to email or not
+	EnableEmailToken bool
+
+	// Proxy Host
+	ProxyHost string
+
+	// SMTP Config
+	SMTP SMTPConfig
 }
 
 // ApplyToken assigns a given token to all internal services but only if token
@@ -347,6 +356,16 @@ type SSHConfig struct {
 	PublicAddrs []utils.NetAddr
 }
 
+// SMPTConfig configures SMPT for emailing
+type SMTPConfig struct {
+	Username   string
+	Password   string
+	Host       string
+	Port       int
+	Sender     string
+	SenderName string
+}
+
 // MakeDefaultConfig creates a new Config structure and populates it with defaults
 func MakeDefaultConfig() (config *Config) {
 	config = &Config{}
@@ -385,6 +404,7 @@ func ApplyDefaults(cfg *Config) {
 	cfg.Ciphers = sc.Ciphers
 	cfg.KEXAlgorithms = kex
 	cfg.MACAlgorithms = macs
+	cfg.EnableEmailToken = false
 
 	// defaults for the auth service:
 	cfg.Auth.Enabled = true
@@ -413,4 +433,15 @@ func ApplyDefaults(cfg *Config) {
 	cfg.SSH.Shell = defaults.DefaultShell
 	defaults.ConfigureLimiter(&cfg.SSH.Limiter)
 	cfg.SSH.PAM = &pam.Config{Enabled: false}
+
+	// default for SMPT
+	cfg.SMTP.Username = ""
+	cfg.SMTP.Password = ""
+	cfg.SMTP.Host = ""
+	cfg.SMTP.Port = 0
+	cfg.SMTP.Sender = ""
+	cfg.SMTP.SenderName = ""
+
+	// default proxy host
+	cfg.SMTP.SenderName = "localhost:3080"
 }

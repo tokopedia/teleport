@@ -128,6 +128,7 @@ var (
 		"ciphers":                false,
 		"kex_algos":              false,
 		"mac_algos":              false,
+		"enable_email_token":     false,
 		"connector_name":         false,
 		"session_recording":      false,
 		"read_capacity_units":    false,
@@ -138,6 +139,14 @@ var (
 		"audit_sessions_uri":     false,
 		"pam":                    true,
 		"service_name":           false,
+		"proxy_host":             false,
+		"smtp":                   true,
+		"username":               false,
+		"password":               false,
+		"host":                   false,
+		"port":                   false,
+		"sender":                 false,
+		"sender_name":            false,
 	}
 )
 
@@ -350,11 +359,13 @@ type Global struct {
 	PIDFile     string           `yaml:"pid_file,omitempty"`
 	AuthToken   string           `yaml:"auth_token,omitempty"`
 	AuthServers []string         `yaml:"auth_servers,omitempty"`
+	ProxyHost   string           `yaml:"proxy_host,omitempty"`
 	Limits      ConnectionLimits `yaml:"connection_limits,omitempty"`
 	Logger      Log              `yaml:"log,omitempty"`
 	Storage     backend.Config   `yaml:"storage,omitempty"`
 	AdvertiseIP string           `yaml:"advertise_ip,omitempty"`
 	CachePolicy CachePolicy      `yaml:"cache,omitempty"`
+	SMTP        SMTP             `yaml:"smtp,omitempty"`
 	SeedConfig  *bool            `yaml:"seed_config,omitempty"`
 
 	// Keys holds the list of SSH key/cert pairs used by all services
@@ -373,6 +384,18 @@ type Global struct {
 	// MACAlgorithms is a list of message authentication codes (MAC) that
 	// the server supports. If omitted the defaults will be used.
 	MACAlgorithms []string `yaml:"mac_algos,omitempty"`
+
+	// enable send invitation link to email or not
+	EnableEmailToken *bool `yaml:"enable_email_token,omitempty"`
+}
+
+type SMTP struct {
+	Username   string `yaml:"username,omitempty"`
+	Password   string `yaml:"password,omitempty"`
+	Host       string `yaml:"host,omitempty"`
+	Port       int    `yaml:"port,omitempty"`
+	Sender     string `yaml:"sender,omitempty"`
+	SenderName string `yaml:"sender_name,omitempty"`
 }
 
 // CachePolicy is used to control  local cache
@@ -410,6 +433,19 @@ func (c *CachePolicy) NeverExpires() bool {
 		return true
 	}
 	return false
+}
+
+// Parse parses smtp from Teleport config
+func (c *SMTP) Parse() (*service.SMTPConfig, error) {
+	out := service.SMTPConfig{
+		Username:   c.Username,
+		Password:   c.Password,
+		Host:       c.Host,
+		Port:       c.Port,
+		Sender:     c.Sender,
+		SenderName: c.SenderName,
+	}
+	return &out, nil
 }
 
 // Parse parses cache policy from Teleport config
