@@ -1365,6 +1365,10 @@ type RoleSet []Role
 
 // MatchLogin returns true if attempted login matches any of the logins
 func MatchLogin(logins []string, login string) bool {
+	if login == "*" {
+		return true
+	}
+
 	for _, l := range logins {
 		if l == login {
 			return true
@@ -1473,6 +1477,9 @@ func (set RoleSet) CheckAccessToServer(login string, s Server) error {
 		matchNamespace := MatchNamespace(role.GetNamespaces(Deny), s.GetNamespace())
 		matchLabels := MatchLabels(role.GetNodeLabels(Deny), s.GetAllLabels())
 		matchLogin := MatchLogin(role.GetLogins(Deny), login)
+		if login == "*" {
+			matchLogin = false
+		}
 		if matchNamespace && (matchLabels || matchLogin) {
 			errorMessage := fmt.Sprintf("role %v denied access to node %v: deny rule matched; match(namespace=%v, label=%v, login=%v)",
 				role.GetName(), s.GetHostname(), matchNamespace, matchLabels, matchLogin)
