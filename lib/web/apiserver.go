@@ -1344,7 +1344,7 @@ func (h *Handler) siteNodesGet(w http.ResponseWriter, r *http.Request, p httprou
 	filteredServers := make([]services.Server, 0)
 
 	for _, s := range servers {
-		err = services.RoleSet(c.userRoles).CheckAccessToServer("root", s)
+		err = services.RoleSet(c.userRoles).CheckAccessToServer("*", s)
 		if err == nil {
 			filteredServers = append(filteredServers, s)
 		}
