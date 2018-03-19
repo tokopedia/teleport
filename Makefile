@@ -10,7 +10,7 @@
 # Naming convention:
 #	for stable releases we use "1.0.0" format
 #   for pre-releases, we use   "1.0.0-beta.2" format
-VERSION=2.4.5
+VERSION=2.4.5.1
 
 # These are standard autotools variables, don't change them please
 BUILDDIR ?= build
@@ -31,7 +31,7 @@ LIBS = $(shell find lib -type f -name '*.go') *.go
 TCTLSRC = $(shell find tool/tctl -type f -name '*.go')
 TELEPORTSRC = $(shell find tool/teleport -type f -name '*.go')
 TSHSRC = $(shell find tool/tsh -type f -name '*.go')
-TELEPORTVENDOR = $(shell find vendor -type f -name '*.go')
+TELEPORTVENDOR = vendor
 
 #
 # 'make all' builds all 3 executables and plaaces them in a current directory
