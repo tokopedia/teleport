@@ -331,14 +331,25 @@ func (b *DynamoDBBackend) fullPath(bucket ...string) string {
 func (b *DynamoDBBackend) getRecords(path string) ([]record, error) {
 	var vals []record
 	query := "HashKey = :hashKey AND begins_with (FullPath, :fullPath)"
+
+	// filter out expired items, otherwise they might show up in the query
+	// but it got buggy for web/users
+	// http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/howitworks-ttl.html
 	attrV := map[string]interface{}{
 		":fullPath":  path,
 		":hashKey":   hashKey,
 		":timestamp": b.clock.Now().UTC().Unix(),
 	}
-	// filter out expired items, otherwise they might show up in the query
-	// http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/howitworks-ttl.html
 	filter := fmt.Sprintf("attribute_not_exists(Expires) OR Expires >= :timestamp")
+
+	if path == "teleport/web/users" {
+		attrV = map[string]interface{}{
+			":fullPath": path,
+			":hashKey":  hashKey,
+		}
+		filter = "attribute_not_exists(Expires) OR attribute_exists(Expires)"
+	}
+
 	av, err := dynamodbattribute.MarshalMap(attrV)
 	input := dynamodb.QueryInput{
 		KeyConditionExpression:    aws.String(query),

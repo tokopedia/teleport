@@ -169,7 +169,7 @@ func (u *UserCommand) List(client *auth.TunClient) error {
 		fmt.Println("No users found")
 		return nil
 	}
-	t := asciitable.MakeTable([]string{"User", "Role", "Logins", "Env"})
+	t := asciitable.MakeTable([]string{"User", "Role", "Logins", "Node Labels"})
 	for _, u := range users {
 		roles := u.GetRoles()
 		if len(roles) == 0 {
