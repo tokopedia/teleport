@@ -169,6 +169,8 @@ type CertAuthority interface {
 	CheckAndSetDefaults() error
 	// SetSigningKeys sets signing keys
 	SetSigningKeys([][]byte) error
+	// SetCheckingKeys sets signing keys
+	SetCheckingKeys([][]byte) error
 	// AddRole adds a role to ca role list
 	AddRole(name string)
 	// Checkers returns public keys that can be used to check cert authorities
@@ -187,6 +189,10 @@ type CertAuthority interface {
 	SetTLSKeyPairs(keyPairs []TLSKeyPair)
 	// GetTLSKeyPairs returns first PEM encoded TLS cert
 	GetTLSKeyPairs() []TLSKeyPair
+	// GetRotation returns rotation infor
+	GetRotation() Rotation
+	// SetRotation sets rotation state
+	SetRotation(Rotation)
 }
 
 // CertPoolFromCertAuthorities returns certificate pools from TLS certificates
@@ -296,6 +302,16 @@ type CertAuthorityV2 struct {
 	rawObject interface{}
 }
 
+// GetRotation returns rotation infor
+func (c *CertAuthorityV2) GetRotation() Rotation {
+	return c.Spec.Rotation
+}
+
+// SetRotation sets rotation state
+func (c *CertAuthorityV2) SetRotation(r Rotation) {
+	c.Spec.Rotation = r
+}
+
 // TLSCA returns TLS certificate authority
 func (c *CertAuthorityV2) TLSCA() (*tlsca.CertAuthority, error) {
 	if len(c.Spec.TLSKeyPairs) == 0 {
@@ -372,6 +388,12 @@ func (ca *CertAuthorityV2) GetSigningKeys() [][]byte {
 // SetSigningKeys sets signing keys
 func (ca *CertAuthorityV2) SetSigningKeys(keys [][]byte) error {
 	ca.Spec.SigningKeys = keys
+	return nil
+}
+
+// SetCheckingKeys sets SSH public keys
+func (ca *CertAuthorityV2) SetCheckingKeys(keys [][]byte) error {
+	ca.Spec.CheckingKeys = keys
 	return nil
 }
 
@@ -520,6 +542,55 @@ func (ca *CertAuthorityV2) CheckAndSetDefaults() error {
 	return nil
 }
 
+const (
+	// RotationStateStandby is initial status of the rotation -
+	// nothing is being rotated
+	RotationStateStandby = "standby"
+	// RotationStateInProgress specifies that rotation is in progress
+	RotationStateInProgress = "in_progress"
+)
+
+// Rotation is a status of the rotation of the certificate authority
+type Rotation struct {
+	// State could be one of "init", means not active or "in_progress"
+	State string `json:"state,omitempty"`
+	// CurrentID is the ID of the rotation operation
+	// to differentiate between rotation attempts
+	CurrentID string `json:"current_id"`
+	// Started is set to the time when rotation has been started
+	// in case if the state of the rotation is "in_progress"
+	Started time.Time `json:"started,omitempty"`
+	// LastRotation is a time of last rotation
+	// GracePeriod is a period during which old and new CA
+	// are valid for checking purposes, but only new CA is issuing certificates
+	GracePeriod Duration `json:"grace_period,omitempty"`
+	// AutoPeriod if set, is going to auto rotate the certificate authority
+	AutoPeriod Duration `json:"auto_period,omitempty"`
+	// LastRotated specifies the last time of the completed rotation
+	LastRotated time.Time `json:"last_rotated,omitempty"`
+}
+
+// CheckAndSetDefaults checks and sets default rotation parameters
+func (r *Rotation) CheckAndSetDefaults() error {
+	switch r.State {
+	case "":
+		r.State = RotationStateStandby
+	case RotationStateStandby:
+	case RotationStateInProgress:
+		if r.CurrentID == "" {
+			return trace.BadParameter("set 'current_id' parameter for in progress rotation")
+		}
+		if r.Started.IsZero() {
+			return trace.BadParameter("set 'started' parameter for in progress rotation")
+		}
+	default:
+		return trace.BadParameter(
+			"unsupported rotation 'state': %q, supported states are: %q, %q",
+			r.State, RotationStateStandby, RotationStateInProgress)
+	}
+	return nil
+}
+
 // CertAuthoritySpecV2 is a host or user certificate authority that
 // can check and if it has private key stored as well, sign it too
 type CertAuthoritySpecV2 struct {
@@ -540,6 +611,8 @@ type CertAuthoritySpecV2 struct {
 	RoleMap RoleMap `json:"role_map,omitempty"`
 	// TLS is a list of TLS key pairs
 	TLSKeyPairs []TLSKeyPair `json:"tls_key_pairs,omitempty"`
+	// Rotation is a status of the certificate authority rotation
+	Rotation Rotation `json:"rotation,omitempty"`
 }
 
 // CertAuthoritySpecV2Schema is JSON schema for cert authority V2
@@ -577,6 +650,18 @@ const CertAuthoritySpecV2Schema = `{
            "cert": {"type": "string"},
            "key": {"type": "string"}
         }
+      }
+    },
+    "rotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {"type": "string"},
+        "current_id": {"type": "string"},
+        "started": {"type": "string"},
+        "grace_period": {"type": "string"},
+        "auto_period": {"type": "string"},
+        "last_rotated": {"type": "string"}
       }
     },
     "role_map": %v

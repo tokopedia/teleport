@@ -272,6 +272,10 @@ const (
 	// CertDuration is a default certificate duration
 	// 12 is default as it' longer than average working day (I hope so)
 	CertDuration = 12 * time.Hour
+	// RotationGracePeriod is a default rotation period for graceful
+	// certificate rotations, by default to set to maximum allowed user
+	// cert duration
+	RotationGracePeriod = MaxCertDuration
 )
 
 // list of roles teleport service can run as:

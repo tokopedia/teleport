@@ -17,6 +17,7 @@ limitations under the License.
 package dir
 
 import (
+	"bytes"
 	"io"
 	"io/ioutil"
 	"os"
@@ -164,6 +165,57 @@ func (bk *Backend) CreateVal(bucket []string, key string, val []byte, ttl time.D
 		return trace.Wrap(err)
 	}
 	defer utils.FSUnlock(f)
+	if err := f.Truncate(0); err != nil {
+		return trace.ConvertSystemError(err)
+	}
+	n, err := f.Write(val)
+	if err == nil && n < len(val) {
+		return trace.Wrap(io.ErrShortWrite)
+	}
+	return trace.Wrap(bk.applyTTL(dirPath, key, ttl))
+}
+
+// CompareAndSwapVal compares and swap values in atomic operation
+func (bk *Backend) CompareAndSwapVal(bucket []string, key string, val []byte, prevVal []byte, ttl time.Duration) error {
+	if len(prevVal) == 0 {
+		return trace.BadParameter("missing prevVal parameter, to atomically create item, use CreateVal method")
+	}
+	// do not allow keys that start with a dot
+	if key[0] == reservedPrefix {
+		return trace.BadParameter("invalid key: '%s'. Key names cannot start with '.'", key)
+	}
+	// create the directory:
+	dirPath := path.Join(bk.RootDir, path.Join(bucket...))
+	err := os.MkdirAll(dirPath, defaultDirMode)
+	if err != nil {
+		return trace.ConvertSystemError(err)
+	}
+	// create the file (AKA "key"):
+	filename := path.Join(dirPath, key)
+	f, err := os.OpenFile(filename, os.O_RDWR|os.O_EXCL, defaultFileMode)
+	if err != nil {
+		err = trace.ConvertSystemError(err)
+		if trace.IsNotFound(err) {
+			return trace.CompareFailed("%v/%v did not match expected value", dirPath, key)
+		}
+		return trace.Wrap(err)
+	}
+	defer f.Close()
+	if err := utils.FSWriteLock(f); err != nil {
+		return trace.Wrap(err)
+	}
+	defer utils.FSUnlock(f)
+	// before writing, make sure the values are equal
+	oldVal, err := ioutil.ReadAll(f)
+	if err != nil {
+		return trace.ConvertSystemError(err)
+	}
+	if bytes.Compare(oldVal, prevVal) != 0 {
+		return trace.CompareFailed("%v/%v did not match expected value", dirPath, key)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return trace.ConvertSystemError(err)
+	}
 	if err := f.Truncate(0); err != nil {
 		return trace.ConvertSystemError(err)
 	}
