@@ -226,6 +226,26 @@ func (s *ServicesTestSuite) CertAuthCRUD(c *C) {
 
 	err = s.CAS.DeleteCertAuthority(*ca.ID())
 	c.Assert(err, IsNil)
+
+	// test compare and swap
+	ca = NewTestCA(services.UserCA, "example.com")
+	c.Assert(s.CAS.CreateCertAuthority(ca), IsNil)
+
+	clock := clockwork.NewFakeClock()
+	newCA := *ca
+	rotation := services.Rotation{
+		State:       services.RotationStateInProgress,
+		CurrentID:   "id1",
+		GracePeriod: services.NewDuration(time.Hour),
+		Started:     clock.Now(),
+	}
+	newCA.SetRotation(rotation)
+
+	err = s.CAS.CompareAndSwapCertAuthority(&newCA, ca)
+
+	out, err = s.CAS.GetCertAuthority(ca.GetID(), true)
+	c.Assert(err, IsNil)
+	fixtures.DeepCompare(c, &newCA, out)
 }
 
 func newServer(kind, name, addr, namespace string) *services.ServerV2 {

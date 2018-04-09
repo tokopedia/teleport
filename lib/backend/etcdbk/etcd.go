@@ -166,6 +166,10 @@ func (b *bk) CreateVal(path []string, key string, val []byte, ttl time.Duration)
 	return trace.Wrap(convertErr(err))
 }
 
+// CompareAndSwapVal compares and swap values in atomic operation,
+// succeeds if prevVal matches the value stored in the databases,
+// requires prevVal as a non-empty value. Returns trace.CompareFailed
+// in case if value did not match
 func (b *bk) CompareAndSwapVal(path []string, key string, val []byte, prevVal []byte, ttl time.Duration) error {
 	if len(prevVal) == 0 {
 		return trace.BadParameter("missing prevVal parameter, to atomically create item, use CreateVal method")
