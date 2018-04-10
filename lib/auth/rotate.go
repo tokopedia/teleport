@@ -70,6 +70,10 @@ func (r *RotateRequest) CheckAndSetDefaults() error {
 
 // RotateCertAuthority starts or restarts certificate rotation process
 func (a *AuthServer) RotateCertAuthority(req RotateRequest) error {
+	// TODO: For whatever reason rotation does not work on DynamoDB - get error.
+	// TODO: For whatever reason cert rotation does not respect grace period.
+	// TODO: What to do with local admin credentials in case of forced rotation?
+
 	if err := req.CheckAndSetDefaults(); err != nil {
 		return trace.Wrap(err)
 	}
@@ -119,6 +123,7 @@ func (a *AuthServer) completeRotation() error {
 			continue
 		}
 		// too early to complete rotation
+		log.WithFields(logrus.Fields{"type": caType}).Infof("BBB: start + grace period %v now: %v: %v", rotation.Started.Add(rotation.GracePeriod.Duration), a.clock.Now(), rotation.GracePeriod.Duration)
 		if rotation.Started.Add(rotation.GracePeriod.Duration).After(a.clock.Now()) {
 			continue
 		}
@@ -147,23 +152,21 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 		return nil, trace.Wrap(err)
 	}
 
-	var tlsKeyPair *services.TLSKeyPair
-	if ca.GetType() == services.HostCA {
-		keyPEM, certPEM, err := tlsca.GenerateSelfSignedCA(pkix.Name{
-			CommonName:   ca.GetClusterName(),
-			Organization: []string{ca.GetClusterName()},
-		}, nil, defaults.CATTL)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		tlsKeyPair = &services.TLSKeyPair{
-			Cert: certPEM,
-			Key:  keyPEM,
-		}
+	keyPEM, certPEM, err := tlsca.GenerateSelfSignedCA(pkix.Name{
+		CommonName:   ca.GetClusterName(),
+		Organization: []string{ca.GetClusterName()},
+	}, nil, defaults.CATTL)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	tlsKeyPair := &services.TLSKeyPair{
+		Cert: certPEM,
+		Key:  keyPEM,
 	}
 
 	// second part of the function rotates the certificate authority
 	rotation.Started = clock.Now().UTC()
+	rotation.GracePeriod = services.NewDuration(gracePeriod)
 	rotation.CurrentID = id
 
 	signingKeys := ca.GetSigningKeys()
@@ -176,9 +179,7 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 	case gracePeriod == 0:
 		signingKeys = [][]byte{sshPrivPEM}
 		checkingKeys = [][]byte{sshPubPEM}
-		if ca.GetType() == services.HostCA {
-			keyPairs = []services.TLSKeyPair{*tlsKeyPair}
-		}
+		keyPairs = []services.TLSKeyPair{*tlsKeyPair}
 		// in case of force rotation, rotation has been started and completed
 		// in the same step moving it to standby state
 		rotation.State = services.RotationStateStandby
@@ -187,11 +188,9 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 		// and keep only public keys/certs for the new CA
 		signingKeys = [][]byte{sshPrivPEM}
 		checkingKeys = [][]byte{sshPubPEM, checkingKeys[0]}
-		if ca.GetType() == services.HostCA {
-			oldKeyPair := keyPairs[0]
-			oldKeyPair.Key = nil
-			keyPairs = []services.TLSKeyPair{*tlsKeyPair, oldKeyPair}
-		}
+		oldKeyPair := keyPairs[0]
+		oldKeyPair.Key = nil
+		keyPairs = []services.TLSKeyPair{*tlsKeyPair, oldKeyPair}
 		rotation.State = services.RotationStateInProgress
 	default:
 		// when rotate is called on the CA being rotated,
@@ -200,9 +199,7 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 		// and overriding it with a new one
 		signingKeys = [][]byte{sshPrivPEM}
 		checkingKeys[0] = sshPubPEM
-		if ca.GetType() == services.HostCA {
-			keyPairs[0] = *tlsKeyPair
-		}
+		keyPairs[0] = *tlsKeyPair
 		rotation.State = services.RotationStateInProgress
 	}
 
@@ -226,9 +223,7 @@ func CompleteRotation(clock clockwork.Clock, ca services.CertAuthority) (service
 
 	signingKeys = signingKeys[:1]
 	checkingKeys = checkingKeys[:1]
-	if ca.GetType() == services.HostCA {
-		keyPairs = keyPairs[:1]
-	}
+	keyPairs = keyPairs[:1]
 
 	rotation.State = services.RotationStateStandby
 	rotation.CurrentID = ""

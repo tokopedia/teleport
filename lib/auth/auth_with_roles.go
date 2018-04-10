@@ -91,16 +91,6 @@ func (a *AuthWithRoles) AuthenticateSSHUser(req AuthenticateSSHRequest) (*SSHLog
 	return a.authServer.AuthenticateSSHUser(req)
 }
 
-// ExchangeCerts exchanges TLS certificates for established host certificate authorities
-func (a *AuthWithRoles) ExchangeCerts(req ExchangeCertsRequest) (*ExchangeCertsResponse, error) {
-	// exchange request has it's own authentication, however this limits the requests
-	// types to proxies to make it harder to break
-	if !a.checker.HasRole(string(teleport.RoleProxy)) {
-		return nil, trace.AccessDenied("this request can be only executed by proxy")
-	}
-	return a.authServer.ExchangeCerts(req)
-}
-
 func (a *AuthWithRoles) GetSessions(namespace string) ([]session.Session, error) {
 	if err := a.action(namespace, services.KindSSHSession, services.VerbList); err != nil {
 		return nil, trace.Wrap(err)

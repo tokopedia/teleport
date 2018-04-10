@@ -342,15 +342,15 @@ func (s *AuthServer) generateUserCert(req certRequest) (*certs, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	hostCA, err := s.Trust.GetCertAuthority(services.CertAuthID{
-		Type:       services.HostCA,
+	userCA, err := s.Trust.GetCertAuthority(services.CertAuthID{
+		Type:       services.UserCA,
 		DomainName: clusterName,
 	}, true)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 	// generate TLS certificate
-	tlsAuthority, err := hostCA.TLSCA()
+	tlsAuthority, err := userCA.TLSCA()
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -627,10 +627,18 @@ func (s *AuthServer) GenerateToken(req GenerateTokenRequest) (string, error) {
 // ClientCertPool returns trusted x509 cerificate authority pool
 func (s *AuthServer) ClientCertPool() (*x509.CertPool, error) {
 	pool := x509.NewCertPool()
-	authorities, err := s.GetCertAuthorities(services.HostCA, false)
+	var authorities []services.CertAuthority
+	hostCAs, err := s.GetCertAuthorities(services.HostCA, false)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
+	userCAs, err := s.GetCertAuthorities(services.UserCA, false)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	authorities = append(authorities, hostCAs...)
+	authorities = append(authorities, userCAs...)
+
 	for _, auth := range authorities {
 		for _, keyPair := range auth.GetTLSKeyPairs() {
 			cert, err := tlsca.ParseCertificatePEM(keyPair.Cert)

@@ -182,8 +182,9 @@ func applyConfig(ccf *GlobalCLIFlags, cfg *service.Config) error {
 	}
 	// --debug flag
 	if ccf.Debug {
+		cfg.Debug = ccf.Debug
 		utils.InitLogger(utils.LoggingForCLI, logrus.DebugLevel)
-		logrus.Debugf("DEBUG loggign enabled")
+		logrus.Debugf("DEBUG logging enabled")
 	}
 
 	// read a host UUID for this node

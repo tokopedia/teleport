@@ -307,68 +307,57 @@ func (s *remoteSite) periodicSendDiscoveryRequests() {
 	}
 }
 
-// DELETE IN: 2.6.0
-// attemptCertExchange tries to exchange TLS certificates with remote
-// clusters that have upgraded to 2.5.0
-func (s *remoteSite) attemptCertExchange() error {
-	// this logic is explicitly using the local non cached
-	// client as it has to have write access to the auth server
-	localCA, err := s.localClient.GetCertAuthority(services.CertAuthID{
-		Type:       services.HostCA,
-		DomainName: s.srv.ClusterName,
-	}, false)
-	if err != nil {
+// updateCertAuthorities updates local and remote cert authorities
+func (s *remoteSite) updateCertAuthorities() error {
+	/*
+				// this logic is explicitly using the local non cached
+				// client as it has to have write access to the auth server
+				localCA, err := s.localClient.GetCertAuthority(services.CertAuthID{
+					Type:       services.HostCA,
+					DomainName: s.srv.ClusterName,
+				}, false)
+				if err != nil {
+					return trace.Wrap(err)
+				}
+				re, err := s.remoteClient.ExchangeCerts(auth.ExchangeCertsRequest{
+					PublicKey: localCA.GetCheckingKeys()[0],
+					TLSCert:   localCA.GetTLSKeyPairs()[0].Cert,
+				})
+				if err != nil {
+					return trace.Wrap(err)
+				}
+
+				remoteCA, err := s.localClient.GetCertAuthority(services.CertAuthID{
+					Type:       services.HostCA,
+					DomainName: s.domainName,
+				}, false)
+				if err != nil {
+					return trace.Wrap(err)
+				}
+			_, err = s.localClient.ExchangeCerts(auth.ExchangeCertsRequest{
+				PublicKey: remoteCA.GetCheckingKeys()[0],
+				TLSCert:   re.TLSCert,
+			})
+
 		return trace.Wrap(err)
-	}
-	re, err := s.remoteClient.ExchangeCerts(auth.ExchangeCertsRequest{
-		PublicKey: localCA.GetCheckingKeys()[0],
-		TLSCert:   localCA.GetTLSKeyPairs()[0].Cert,
-	})
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	remoteCA, err := s.localClient.GetCertAuthority(services.CertAuthID{
-		Type:       services.HostCA,
-		DomainName: s.domainName,
-	}, false)
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	_, err = s.localClient.ExchangeCerts(auth.ExchangeCertsRequest{
-		PublicKey: remoteCA.GetCheckingKeys()[0],
-		TLSCert:   re.TLSCert,
-	})
-	return trace.Wrap(err)
+	*/
+	return nil
 }
 
-// DELETE IN: 2.6.0
-// This logic is only relevant for upgrades from 2.5.0 to 2.6.0
-func (s *remoteSite) periodicAttemptCertExchange() {
-	ticker := time.NewTicker(defaults.NetworkBackoffDuration)
+func (s *remoteSite) periodicUpdateCertAuthorities() {
+	ticker := time.NewTicker(defaults.HighResPollingPeriod)
 	defer ticker.Stop()
-	if err := s.attemptCertExchange(); err != nil {
-		s.Warningf("Attempt at cert exchange failed: %v.", err)
-	} else {
-		s.Debugf("Certificate exchange has completed, going to force reconnect.")
-		s.srv.RemoveSite(s.domainName)
-		s.Close()
-		return
-	}
-
 	for {
 		select {
 		case <-s.ctx.Done():
 			s.Debugf("Context is closing.")
 			return
 		case <-ticker.C:
-			err := s.attemptCertExchange()
+			err := s.updateCertAuthorities()
 			if err != nil {
-				s.Warningf("Could not perform certificate exchange: %v.", trace.DebugReport(err))
+				s.Warningf("Could not perform cert authorities updated: %v.", trace.DebugReport(err))
 			} else {
-				s.Debugf("Certificate exchange has completed, going to force reconnect.")
-				s.srv.RemoveSite(s.domainName)
-				s.Close()
-				return
+				s.Debugf("Certificate authorities updated.")
 			}
 		}
 	}

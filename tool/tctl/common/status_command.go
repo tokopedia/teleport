@@ -73,19 +73,35 @@ func (c *StatusCommand) Status(client auth.ClientI) error {
 
 	authorities := append(userCAs, hostCAs...)
 	view := func() string {
-		table := asciitable.MakeTable([]string{"Parameter", "Status and description"})
-		table.AddRow([]string{"Local Cluster Name", clusterName})
+		table := asciitable.MakeHeadlessTable(2)
+		table.AddRow([]string{"Cluster", clusterName})
 		for _, ca := range authorities {
-			local := "Local"
 			if ca.GetClusterName() != clusterName {
-				local = "Remote"
+				continue
 			}
-			info := fmt.Sprintf("%v %v CA", local, strings.Title(string(ca.GetType())))
+			info := fmt.Sprintf("%v CA ", strings.Title(string(ca.GetType())))
 			rotation := ca.GetRotation()
 			table.AddRow([]string{info, rotation.String()})
 		}
 		return table.AsBuffer().String()
 	}
 	fmt.Printf(view())
+
+	// in debug mode, output mode of remote authorities
+	if c.config.Debug {
+		view := func() string {
+			table := asciitable.MakeHeadlessTable(2)
+			for _, ca := range authorities {
+				if ca.GetClusterName() == clusterName {
+					continue
+				}
+				info := fmt.Sprintf("Remote %v CA %q", strings.Title(string(ca.GetType())), clusterName)
+				rotation := ca.GetRotation()
+				table.AddRow([]string{info, rotation.String()})
+			}
+			return table.AsBuffer().String()
+		}
+		fmt.Printf(view())
+	}
 	return nil
 }

@@ -58,7 +58,6 @@ func Register(dataDir, token string, id IdentityID, servers []utils.NetAddr, add
 	certPath := filepath.Join(dataDir, defaults.CACertFile)
 	certBytes, err := utils.ReadPath(certPath)
 	if err != nil {
-		// DELETE IN: 2.6.0
 		// Only support secure cluster joins in the next releases
 		if !trace.IsNotFound(err) {
 			return trace.Wrap(err)

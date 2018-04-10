@@ -827,7 +827,7 @@ func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 	remoteSite.localClient = srv.localAuthClient
 	remoteSite.localAccessPoint = srv.localAccessPoint
 
-	clt, isLegacyRemoteCluster, err := remoteSite.getRemoteClient()
+	clt, _, err := remoteSite.getRemoteClient()
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -852,11 +852,7 @@ func newRemoteSite(srv *server, domainName string) (*remoteSite, error) {
 	remoteSite.certificateCache = certificateCache
 
 	go remoteSite.periodicSendDiscoveryRequests()
-
-	// if remote cluster is legacy, attempt periodic certificate exchanges
-	if isLegacyRemoteCluster {
-		go remoteSite.periodicAttemptCertExchange()
-	}
+	go remoteSite.periodicUpdateCertAuthorities()
 
 	return remoteSite, nil
 }

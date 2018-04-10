@@ -308,6 +308,15 @@ type CertAuthorityV2 struct {
 func (c *CertAuthorityV2) Clone() CertAuthority {
 	out := *c
 	out.rawObject = nil
+	out.Spec.CheckingKeys = utils.CopyByteSlices(c.Spec.CheckingKeys)
+	out.Spec.SigningKeys = utils.CopyByteSlices(c.Spec.SigningKeys)
+	for i, kp := range c.Spec.TLSKeyPairs {
+		out.Spec.TLSKeyPairs[i] = TLSKeyPair{
+			Key:  utils.CopyByteSlice(kp.Key),
+			Cert: utils.CopyByteSlice(kp.Cert),
+		}
+	}
+	out.Spec.Roles = utils.CopyStrings(c.Spec.Roles)
 	return &out
 }
 
@@ -581,11 +590,11 @@ type Rotation struct {
 
 // String returns user friendly information about certificate authority
 func (r *Rotation) String() string {
-	if r.LastRotated.IsZero() {
-		return "never updated"
-	}
 	switch r.State {
 	case "", RotationStateStandby:
+		if r.LastRotated.IsZero() {
+			return "never updated"
+		}
 		return fmt.Sprintf("last rotated %v", r.LastRotated.Format(teleport.HumanDateFormatSeconds))
 	case RotationStateInProgress:
 		return fmt.Sprintf("graceful rotation started %v, going to complete %v",

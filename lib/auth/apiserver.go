@@ -71,11 +71,6 @@ func NewAPIServer(config *APIConfig) http.Handler {
 	srv.GET("/:version/authorities/:type/:domain", srv.withAuth(srv.getCertAuthority))
 	srv.GET("/:version/authorities/:type", srv.withAuth(srv.getCertAuthorities))
 
-	// DELETE IN: 2.6.0
-	// Certificate exchange for cluster upgrades used to upgrade from 2.4.0
-	// to 2.5.0 clusters.
-	srv.POST("/:version/exchangecerts", srv.withAuth(srv.exchangeCerts))
-
 	// Generating certificates for user and host authorities
 	srv.POST("/:version/ca/host/certs", srv.withAuth(srv.generateHostCert))
 	srv.POST("/:version/ca/user/certs", srv.withAuth(srv.generateUserCert))
@@ -647,14 +642,6 @@ func (s *APIServer) authenticateSSHUser(auth ClientI, w http.ResponseWriter, r *
 	}
 	req.Username = p.ByName("user")
 	return auth.AuthenticateSSHUser(req)
-}
-
-func (s *APIServer) exchangeCerts(auth ClientI, w http.ResponseWriter, r *http.Request, p httprouter.Params, version string) (interface{}, error) {
-	var req ExchangeCertsRequest
-	if err := httplib.ReadJSON(r, &req); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return auth.ExchangeCerts(req)
 }
 
 func (s *APIServer) changePassword(auth ClientI, w http.ResponseWriter, r *http.Request, p httprouter.Params, version string) (interface{}, error) {
