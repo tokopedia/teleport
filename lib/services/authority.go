@@ -193,6 +193,8 @@ type CertAuthority interface {
 	GetRotation() Rotation
 	// SetRotation sets rotation state
 	SetRotation(Rotation)
+	// Clone returns shallow copy of the cert authority object
+	Clone() CertAuthority
 }
 
 // CertPoolFromCertAuthorities returns certificate pools from TLS certificates
@@ -300,6 +302,13 @@ type CertAuthorityV2 struct {
 	// rawObject is object that is raw object stored in DB
 	// without any conversions applied, used in migrations
 	rawObject interface{}
+}
+
+// Clone returns shallow copy of the cert authority
+func (c *CertAuthorityV2) Clone() CertAuthority {
+	out := *c
+	out.rawObject = nil
+	return &out
 }
 
 // GetRotation returns rotation infor
@@ -568,6 +577,23 @@ type Rotation struct {
 	AutoPeriod Duration `json:"auto_period,omitempty"`
 	// LastRotated specifies the last time of the completed rotation
 	LastRotated time.Time `json:"last_rotated,omitempty"`
+}
+
+// String returns user friendly information about certificate authority
+func (r *Rotation) String() string {
+	if r.LastRotated.IsZero() {
+		return "never updated"
+	}
+	switch r.State {
+	case "", RotationStateStandby:
+		return fmt.Sprintf("last rotated %v", r.LastRotated.Format(teleport.HumanDateFormatSeconds))
+	case RotationStateInProgress:
+		return fmt.Sprintf("graceful rotation started %v, going to complete %v",
+			r.Started.Format(teleport.HumanDateFormatSeconds),
+			r.Started.Add(r.GracePeriod.Duration).Format(teleport.HumanDateFormatSeconds))
+	default:
+		return "unknown"
+	}
 }
 
 // CheckAndSetDefaults checks and sets default rotation parameters

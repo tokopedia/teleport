@@ -86,7 +86,7 @@ func Run(commands []CLICommand) {
 		"Base64 encoded configuration string").Hidden().Envar(defaults.ConfigEnvar).StringVar(&ccf.ConfigString)
 
 	// "version" command is always available:
-	ver := app.Command("version", "Print the version.")
+	ver := app.Command("version", "Print cluster version")
 	app.HelpFlag.Short('h')
 
 	// parse CLI commands+flags:

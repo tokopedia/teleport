@@ -17,9 +17,9 @@ import (
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/sshutils"
 	"github.com/gravitational/teleport/lib/utils"
-	"github.com/gravitational/trace"
 
 	"github.com/gravitational/kingpin"
+	"github.com/gravitational/trace"
 )
 
 // AuthCommand implements `tctl auth` group of commands
@@ -38,9 +38,13 @@ type AuthCommand struct {
 	compatVersion              string
 	compatibility              string
 
+	rotateGracePeriod time.Duration
+	rotateType        string
+
 	authGenerate *kingpin.CmdClause
 	authExport   *kingpin.CmdClause
 	authSign     *kingpin.CmdClause
+	authRotate   *kingpin.CmdClause
 }
 
 // Initialize allows TokenCommand to plug itself into the CLI parser
@@ -66,6 +70,10 @@ func (a *AuthCommand) Initialize(app *kingpin.Application, config *service.Confi
 	a.authSign.Flag("format", "identity format: 'file' (default) or 'dir'").Default(string(client.DefaultIdentityFormat)).StringVar((*string)(&a.outputFormat))
 	a.authSign.Flag("ttl", "TTL (time to live) for the generated certificate").Default(fmt.Sprintf("%v", defaults.CertDuration)).DurationVar(&a.genTTL)
 	a.authSign.Flag("compat", "OpenSSH compatibility flag").StringVar(&a.compatibility)
+
+	a.authRotate = auth.Command("rotate", "Rotate certificate authorities in the cluster.")
+	a.authRotate.Flag("grace-period", "Grace period keeps previous certificate authorities signatures valid. If set to 0 will force users to relogin and nodes to re-register.").Default(fmt.Sprintf("%v", defaults.RotationGracePeriod)).DurationVar(&a.rotateGracePeriod)
+	a.authRotate.Flag("type", "Certificate authority to rotate, rotates both host and user CA by default").StringVar(&a.rotateType)
 }
 
 // TryRun takes the CLI command as an argument (like "auth gen") and executes it
@@ -78,7 +86,8 @@ func (a *AuthCommand) TryRun(cmd string, client auth.ClientI) (match bool, err e
 		err = a.ExportAuthorities(client)
 	case a.authSign.FullCommand():
 		err = a.GenerateAndSignKeys(client)
-
+	case a.authRotate.FullCommand():
+		err = a.RotateCertAuthority(client)
 	default:
 		return false, nil
 	}
@@ -234,6 +243,19 @@ func (a *AuthCommand) GenerateAndSignKeys(clusterApi auth.ClientI) error {
 	default:
 		return trace.BadParameter("--user or --host must be specified")
 	}
+}
+
+// RotateCertAuthority starts or restarts certificate authority rotation process
+func (a *AuthCommand) RotateCertAuthority(client auth.ClientI) error {
+	req := auth.RotateRequest{
+		Type:        services.CertAuthType(a.rotateType),
+		GracePeriod: &a.rotateGracePeriod,
+	}
+	if err := client.RotateCertAuthority(req); err != nil {
+		return err
+	}
+	fmt.Printf("Initiated certificate authority rotation. To check status use 'tctl status'\n")
+	return nil
 }
 
 func (a *AuthCommand) generateHostKeys(clusterApi auth.ClientI) error {

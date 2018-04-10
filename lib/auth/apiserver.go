@@ -64,7 +64,9 @@ func NewAPIServer(config *APIConfig) http.Handler {
 
 	// Operations on certificate authorities
 	srv.GET("/:version/domain", srv.withAuth(srv.getDomainName))
+
 	srv.POST("/:version/authorities/:type", srv.withAuth(srv.upsertCertAuthority))
+	srv.POST("/:version/authorities/:type/rotate", srv.withAuth(srv.rotateCertAuthority))
 	srv.DELETE("/:version/authorities/:type/:domain", srv.withAuth(srv.deleteCertAuthority))
 	srv.GET("/:version/authorities/:type/:domain", srv.withAuth(srv.getCertAuthority))
 	srv.GET("/:version/authorities/:type", srv.withAuth(srv.getCertAuthorities))
@@ -929,6 +931,20 @@ func (s *APIServer) generateServerKeys(auth ClientI, w http.ResponseWriter, r *h
 	}
 
 	return keys, nil
+}
+
+func (s *APIServer) rotateCertAuthority(auth ClientI, w http.ResponseWriter, r *http.Request, p httprouter.Params, version string) (interface{}, error) {
+	var req RotateRequest
+	if err := httplib.ReadJSON(r, &req); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	if err := req.CheckAndSetDefaults(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	if err := auth.RotateCertAuthority(req); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return message("ok"), nil
 }
 
 type upsertCertAuthorityRawReq struct {

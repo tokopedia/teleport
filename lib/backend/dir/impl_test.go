@@ -121,8 +121,10 @@ func (s *Suite) TestConcurrentOperations(c *check.C) {
 
 		go func(cnt int) {
 			err := s.bk.DeleteBucket([]string{"concurrent"}, "bucket")
+			if err != nil && !trace.IsNotFound(err) {
+				c.Assert(err, check.IsNil)
+			}
 			resultsC <- struct{}{}
-			c.Assert(err, check.IsNil)
 		}(i)
 	}
 	timeoutC := time.After(3 * time.Second)

@@ -174,11 +174,11 @@ func (s *ServicesTestSuite) UsersCRUD(c *C) {
 	userSlicesEqual(c, u, []services.User{newUser("user2", nil)})
 
 	err = s.WebS.DeleteUser("user1")
-	c.Assert(trace.IsNotFound(err), Equals, true, Commentf("unexpected %T %#v", err, err))
+	fixtures.ExpectNotFound(c, err)
 
 	// bad username
 	err = s.WebS.UpsertUser(newUser("", nil))
-	c.Assert(trace.IsBadParameter(err), Equals, true, Commentf("expected bad parameter error, got %T", err))
+	fixtures.ExpectBadParameter(c, err)
 }
 
 func (s *ServicesTestSuite) LoginAttempts(c *C) {

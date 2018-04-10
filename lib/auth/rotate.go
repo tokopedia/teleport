@@ -28,6 +28,7 @@ import (
 	"github.com/gravitational/trace"
 	"github.com/jonboulle/clockwork"
 	"github.com/pborman/uuid"
+	"github.com/sirupsen/logrus"
 )
 
 // RotateRequest is a request to start rotation of the certificate authority
@@ -38,6 +39,19 @@ type RotateRequest struct {
 	// if 0 is supplied, means force rotate all certificate authorities
 	// right away.
 	GracePeriod *time.Duration `json:"grace_period,omitempty"`
+}
+
+// Types returns cert authority types requested to rotate
+func (r *RotateRequest) Types() []services.CertAuthType {
+	switch r.Type {
+	case "":
+		return []services.CertAuthType{services.HostCA, services.UserCA}
+	case services.HostCA:
+		return []services.CertAuthType{services.HostCA}
+	case services.UserCA:
+		return []services.CertAuthType{services.UserCA}
+	}
+	return nil
 }
 
 // CheckAndSetDefaults checks and sets defaults
@@ -54,19 +68,75 @@ func (r *RotateRequest) CheckAndSetDefaults() error {
 	return nil
 }
 
-// Rotate starts or updates certificate rotation
-func (s *AuthServer) Rotate(req RotateRequest) error {
+// RotateCertAuthority starts or restarts certificate rotation process
+func (a *AuthServer) RotateCertAuthority(req RotateRequest) error {
 	if err := req.CheckAndSetDefaults(); err != nil {
 		return trace.Wrap(err)
 	}
 	clusterName := a.clusterName.GetClusterName()
 
-	s.GetCertAuthority()
+	caTypes := req.Types()
+	for _, caType := range caTypes {
+		existing, err := a.GetCertAuthority(services.CertAuthID{
+			Type:       caType,
+			DomainName: clusterName,
+		}, true)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		rotated, err := StartRotation(a.clock, existing, *req.GracePeriod)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		if err := a.CompareAndSwapCertAuthority(rotated, existing); err != nil {
+			return trace.Wrap(err)
+		}
+		switch rotated.GetRotation().State {
+		case services.RotationStateInProgress:
+			log.WithFields(logrus.Fields{"type": caType}).Infof("Started graceful rotation - users and nodes will reload credentials.")
+		case services.RotationStateStandby:
+			log.WithFields(logrus.Fields{"type": caType}).Infof("Performed non-graceful rotation, existing users have to relogin and nodes have to re-register.")
+		}
+	}
+	return nil
+}
+
+// completeRotation attempts to complete rotation, is safe to execute concurrently,
+// as it is uses compare and swap operations.
+func (a *AuthServer) completeRotation() error {
+	clusterName := a.clusterName.GetClusterName()
+	for _, caType := range []services.CertAuthType{services.HostCA, services.UserCA} {
+		ca, err := a.GetCertAuthority(services.CertAuthID{
+			Type:       caType,
+			DomainName: clusterName,
+		}, true)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		rotation := ca.GetRotation()
+		// rotation is not in progress, there is nothing to do
+		if rotation.State != services.RotationStateInProgress {
+			continue
+		}
+		// too early to complete rotation
+		if rotation.Started.Add(rotation.GracePeriod.Duration).After(a.clock.Now()) {
+			continue
+		}
+		rotated, err := CompleteRotation(a.clock, ca)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		if err := a.CompareAndSwapCertAuthority(rotated, ca); err != nil {
+			return trace.Wrap(err)
+		}
+		log.WithFields(logrus.Fields{"type": caType}).Infof("Completed rotation.")
+	}
+	return nil
 }
 
 // StartRotation starts certificate authority rotation
-func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod time.Duration) error {
-	log.Infof("Start rotation of %v", ca.GetName())
+func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod time.Duration) (services.CertAuthority, error) {
+	ca = ca.Clone()
 	rotation := ca.GetRotation()
 
 	id := uuid.New()
@@ -74,7 +144,7 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 	// first part of the function generates credentials
 	sshPrivPEM, sshPubPEM, err := native.GenerateKeyPair("")
 	if err != nil {
-		return trace.Wrap(err)
+		return nil, trace.Wrap(err)
 	}
 
 	var tlsKeyPair *services.TLSKeyPair
@@ -84,7 +154,7 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 			Organization: []string{ca.GetClusterName()},
 		}, nil, defaults.CATTL)
 		if err != nil {
-			return trace.Wrap(err)
+			return nil, trace.Wrap(err)
 		}
 		tlsKeyPair = &services.TLSKeyPair{
 			Cert: certPEM,
@@ -95,7 +165,6 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 	// second part of the function rotates the certificate authority
 	rotation.Started = clock.Now().UTC()
 	rotation.CurrentID = id
-	rotation.State = services.RotationStateInProgress
 
 	signingKeys := ca.GetSigningKeys()
 	checkingKeys := ca.GetCheckingKeys()
@@ -110,6 +179,9 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 		if ca.GetType() == services.HostCA {
 			keyPairs = []services.TLSKeyPair{*tlsKeyPair}
 		}
+		// in case of force rotation, rotation has been started and completed
+		// in the same step moving it to standby state
+		rotation.State = services.RotationStateStandby
 	case rotation.State != services.RotationStateInProgress:
 		// rotation sets the first key to be the new key
 		// and keep only public keys/certs for the new CA
@@ -120,6 +192,7 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 			oldKeyPair.Key = nil
 			keyPairs = []services.TLSKeyPair{*tlsKeyPair, oldKeyPair}
 		}
+		rotation.State = services.RotationStateInProgress
 	default:
 		// when rotate is called on the CA being rotated,
 		// the new CA gets overriden, but old CA public keys are being kept
@@ -130,21 +203,23 @@ func StartRotation(clock clockwork.Clock, ca services.CertAuthority, gracePeriod
 		if ca.GetType() == services.HostCA {
 			keyPairs[0] = *tlsKeyPair
 		}
+		rotation.State = services.RotationStateInProgress
 	}
 
 	ca.SetSigningKeys(signingKeys)
 	ca.SetCheckingKeys(checkingKeys)
 	ca.SetTLSKeyPairs(keyPairs)
 	ca.SetRotation(rotation)
-	return nil
+	return ca, nil
 }
 
-// EndRotation ends certificate authority rotation
-func EndRotation(clock clockwork.Clock, ca services.CertAuthority) error {
+// CompleteRotation completes certificate authority rotation
+func CompleteRotation(clock clockwork.Clock, ca services.CertAuthority) (services.CertAuthority, error) {
 	rotation := ca.GetRotation()
 	if rotation.State != services.RotationStateInProgress {
-		return trace.BadParameter("certificate authority is not being rotated")
+		return nil, trace.BadParameter("certificate authority is not being rotated")
 	}
+	ca = ca.Clone()
 	signingKeys := ca.GetSigningKeys()
 	checkingKeys := ca.GetCheckingKeys()
 	keyPairs := ca.GetTLSKeyPairs()
@@ -163,5 +238,5 @@ func EndRotation(clock clockwork.Clock, ca services.CertAuthority) error {
 	ca.SetCheckingKeys(checkingKeys)
 	ca.SetTLSKeyPairs(keyPairs)
 	ca.SetRotation(rotation)
-	return nil
+	return ca, nil
 }

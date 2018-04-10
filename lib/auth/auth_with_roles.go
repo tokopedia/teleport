@@ -134,6 +134,20 @@ func (a *AuthWithRoles) CreateCertAuthority(ca services.CertAuthority) error {
 	return trace.BadParameter("not implemented")
 }
 
+// Rotate starts or restarts certificate rotation process
+func (a *AuthWithRoles) RotateCertAuthority(req RotateRequest) error {
+	if err := req.CheckAndSetDefaults(); err != nil {
+		return trace.Wrap(err)
+	}
+	if err := a.action(defaults.Namespace, services.KindCertAuthority, services.VerbCreate); err != nil {
+		return trace.Wrap(err)
+	}
+	if err := a.action(defaults.Namespace, services.KindCertAuthority, services.VerbUpdate); err != nil {
+		return trace.Wrap(err)
+	}
+	return a.authServer.RotateCertAuthority(req)
+}
+
 func (a *AuthWithRoles) UpsertCertAuthority(ca services.CertAuthority) error {
 	if err := a.action(defaults.Namespace, services.KindCertAuthority, services.VerbCreate); err != nil {
 		return trace.Wrap(err)
@@ -142,6 +156,16 @@ func (a *AuthWithRoles) UpsertCertAuthority(ca services.CertAuthority) error {
 		return trace.Wrap(err)
 	}
 	return a.authServer.UpsertCertAuthority(ca)
+}
+
+func (a *AuthWithRoles) CompareAndSwapCertAuthority(new, existing services.CertAuthority) error {
+	if err := a.action(defaults.Namespace, services.KindCertAuthority, services.VerbCreate); err != nil {
+		return trace.Wrap(err)
+	}
+	if err := a.action(defaults.Namespace, services.KindCertAuthority, services.VerbUpdate); err != nil {
+		return trace.Wrap(err)
+	}
+	return a.authServer.CompareAndSwapCertAuthority(new, existing)
 }
 
 func (a *AuthWithRoles) GetCertAuthorities(caType services.CertAuthType, loadKeys bool) ([]services.CertAuthority, error) {
@@ -170,13 +194,6 @@ func (a *AuthWithRoles) GetCertAuthority(id services.CertAuthID, loadKeys bool) 
 		}
 	}
 	return a.authServer.GetCertAuthority(id, loadKeys)
-}
-
-func (a *AuthWithRoles) GetAnyCertAuthority(id services.CertAuthID) (services.CertAuthority, error) {
-	if err := a.action(defaults.Namespace, services.KindCertAuthority, services.VerbReadNoSecrets); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return a.authServer.GetAnyCertAuthority(id)
 }
 
 func (a *AuthWithRoles) GetDomainName() (string, error) {

@@ -303,6 +303,19 @@ func (c *Client) CreateCertAuthority(ca services.CertAuthority) error {
 	return trace.BadParameter("not implemented")
 }
 
+// Rotate starts or restart certificate authority rotation request
+func (c *Client) RotateCertAuthority(req RotateRequest) error {
+	if err := req.CheckAndSetDefaults(); err != nil {
+		return trace.Wrap(err)
+	}
+	caType := "all"
+	if req.Type != "" {
+		caType = string(req.Type)
+	}
+	_, err := c.PostJSON(c.Endpoint("authorities", caType, "rotate"), req)
+	return trace.Wrap(err)
+}
+
 // UpsertCertAuthority updates or inserts new cert authority
 func (c *Client) UpsertCertAuthority(ca services.CertAuthority) error {
 	if err := ca.Check(); err != nil {
@@ -315,6 +328,12 @@ func (c *Client) UpsertCertAuthority(ca services.CertAuthority) error {
 	_, err = c.PostJSON(c.Endpoint("authorities", string(ca.GetType())),
 		&upsertCertAuthorityRawReq{CA: data})
 	return trace.Wrap(err)
+}
+
+// CompareAndSwapCertAuthority updates certificate authority if existing certificate
+// authority matches
+func (c *Client) CompareAndSwapCertAuthority(new, existing services.CertAuthority) error {
+	return trace.BadParameter("this function is not supported on the client")
 }
 
 // GetCertAuthorities returns a list of certificate authorities
@@ -356,11 +375,6 @@ func (c *Client) GetCertAuthority(id services.CertAuthID, loadSigningKeys bool) 
 		return nil, trace.Wrap(err)
 	}
 	return services.GetCertAuthorityMarshaler().UnmarshalCertAuthority(out.Bytes())
-}
-
-// GetAnyCertAuthority returns certificate authority by given id whether it's activated or not
-func (c *Client) GetAnyCertAuthority(id services.CertAuthID) (services.CertAuthority, error) {
-	return nil, trace.BadParameter("not implemented")
 }
 
 // DeleteCertAuthority deletes cert authority by ID
@@ -2265,6 +2279,9 @@ type ClientI interface {
 	WebService
 	session.Service
 	services.ClusterConfiguration
+
+	// RotateCertAuthority starts or restarts certificate authority rotation procedure
+	RotateCertAuthority(req RotateRequest) error
 
 	// ValidateTrustedCluster validates trusted cluster token with
 	// main cluster, in case if validation is successfull, main cluster

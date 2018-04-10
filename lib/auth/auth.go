@@ -24,8 +24,10 @@ limitations under the License.
 package auth
 
 import (
+	"context"
 	"crypto/x509"
 	"fmt"
+	"math/rand"
 	"net/url"
 	"sync"
 	"time"
@@ -78,6 +80,7 @@ func NewAuthServer(cfg *InitConfig, opts ...AuthServerOption) (*AuthServer, erro
 	if cfg.AuditLog == nil {
 		cfg.AuditLog = events.NewDiscardAuditLog()
 	}
+	closeCtx, cancelFunc := context.WithCancel(context.TODO())
 	as := AuthServer{
 		clusterName:          cfg.ClusterName,
 		bk:                   cfg.Backend,
@@ -93,6 +96,8 @@ func NewAuthServer(cfg *InitConfig, opts ...AuthServerOption) (*AuthServer, erro
 		oidcClients:          make(map[string]*oidcClient),
 		samlProviders:        make(map[string]*samlProvider),
 		githubClients:        make(map[string]*githubClient),
+		cancelFunc:           cancelFunc,
+		closeCtx:             closeCtx,
 	}
 	for _, o := range opts {
 		o(&as)
@@ -100,6 +105,7 @@ func NewAuthServer(cfg *InitConfig, opts ...AuthServerOption) (*AuthServer, erro
 	if as.clock == nil {
 		as.clock = clockwork.NewRealClock()
 	}
+	go as.runPeriodicOperations()
 
 	return &as, nil
 }
@@ -119,6 +125,9 @@ type AuthServer struct {
 	clock         clockwork.Clock
 	bk            backend.Backend
 
+	closeCtx   context.Context
+	cancelFunc context.CancelFunc
+
 	sshca.Authority
 
 	// AuthServiceName is a human-readable name of this CA. If several Auth services are running
@@ -137,7 +146,37 @@ type AuthServer struct {
 	clusterName services.ClusterName
 }
 
+// runPeriodicOperations runs some periodic bookkeeping operations
+// performed by auth server
+func (a *AuthServer) runPeriodicOperations() {
+	// run periodic functions with a semi-random period
+	// to avoid contention on the database in case if there are multiple
+	// auth servers running - so they don't compete trying
+	// to update the same resources.
+	r := rand.New(rand.NewSource(a.clock.Now().UnixNano()))
+	period := defaults.HighResPollingPeriod + time.Duration(r.Intn(int(defaults.HighResPollingPeriod/time.Second)))*time.Second
+	log.Debugf("Ticking with period: %v", period)
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.closeCtx.Done():
+			return
+		case <-ticker.C:
+			err := a.completeRotation()
+			if err != nil {
+				if trace.IsCompareFailed(err) {
+					log.Debugf("Cert authority has been updated concurrently: %v", err)
+				} else {
+					log.Errorf("Failed to perform cert rotation check: %v", err)
+				}
+			}
+		}
+	}
+}
+
 func (a *AuthServer) Close() error {
+	a.cancelFunc()
 	if a.bk != nil {
 		return trace.Wrap(a.bk.Close())
 	}

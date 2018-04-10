@@ -244,6 +244,9 @@ var (
 
 	// ReportingPeriod is a period for reports in logs
 	ReportingPeriod = 5 * time.Minute
+
+	// HighResPollingPeriod is a default high resolution polling period
+	HighResPollingPeriod = 5 * time.Second
 )
 
 // Default connection limits, they can be applied separately on any of the Teleport
