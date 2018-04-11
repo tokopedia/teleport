@@ -282,6 +282,32 @@ func (process *TeleportProcess) connectToAuthService(role teleport.Role, additio
 			return nil, trace.Wrap(err)
 		}
 	}
+	/*
+		// check if there is a need to re-register with new client credentials
+		ca, err := client.GetCertAuthority(services.CertAuthID{
+			DomainName: identity.ClusterName,
+			Type:       services.HostCA,
+		}, false)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		needsUpdate, err := identity.NeedsUpdate(ca)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		if needsUpdate {
+			log.Infof("Certificate authority has been updated, going to re-register %v.", identity.ID)
+			if err := auth.ReRegister(process.Config.DataDir, client, identity.ID, additionalPrincipals); err != nil {
+				return nil, trace.Wrap(err)
+			}
+			if identity, err = process.readIdentity(role); err != nil {
+				return nil, trace.Wrap(err)
+			}
+			tlsConfig, err = identity.TLSConfig()
+			if err != nil {
+				return nil, trace.Wrap(err)
+			}
+		}*/
 	// success ? we're logged in!
 	return &Connector{Client: client, Identity: identity}, nil
 }

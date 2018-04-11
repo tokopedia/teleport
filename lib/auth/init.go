@@ -236,13 +236,22 @@ func Init(cfg InitConfig, opts ...AuthServerOption) (*AuthServer, *Identity, err
 	}
 
 	// generate a user certificate authority if it doesn't exist
-	if _, err := asrv.GetCertAuthority(services.CertAuthID{DomainName: cfg.ClusterName.GetClusterName(), Type: services.UserCA}, false); err != nil {
+	userCA, err := asrv.GetCertAuthority(services.CertAuthID{DomainName: cfg.ClusterName.GetClusterName(), Type: services.UserCA}, false)
+	if err != nil {
 		if !trace.IsNotFound(err) {
 			return nil, nil, trace.Wrap(err)
 		}
 
 		log.Infof("First start: generating user certificate authority.")
 		priv, pub, err := asrv.GenerateKeyPair("")
+		if err != nil {
+			return nil, nil, trace.Wrap(err)
+		}
+
+		keyPEM, certPEM, err := tlsca.GenerateSelfSignedCA(pkix.Name{
+			CommonName:   cfg.ClusterName.GetClusterName(),
+			Organization: []string{cfg.ClusterName.GetClusterName()},
+		}, nil, defaults.CATTL)
 		if err != nil {
 			return nil, nil, trace.Wrap(err)
 		}
@@ -259,9 +268,23 @@ func Init(cfg InitConfig, opts ...AuthServerOption) (*AuthServer, *Identity, err
 				Type:         services.UserCA,
 				SigningKeys:  [][]byte{priv},
 				CheckingKeys: [][]byte{pub},
+				TLSKeyPairs:  []services.TLSKeyPair{{Cert: certPEM, Key: keyPEM}},
 			},
 		}
 
+		if err := asrv.Trust.UpsertCertAuthority(userCA); err != nil {
+			return nil, nil, trace.Wrap(err)
+		}
+	} else if len(userCA.GetTLSKeyPairs()) == 0 {
+		log.Infof("Migrate: generating TLS CA for existing host CA.")
+		keyPEM, certPEM, err := tlsca.GenerateSelfSignedCA(pkix.Name{
+			CommonName:   cfg.ClusterName.GetClusterName(),
+			Organization: []string{cfg.ClusterName.GetClusterName()},
+		}, nil, defaults.CATTL)
+		if err != nil {
+			return nil, nil, trace.Wrap(err)
+		}
+		userCA.SetTLSKeyPairs([]services.TLSKeyPair{{Cert: certPEM, Key: keyPEM}})
 		if err := asrv.Trust.UpsertCertAuthority(userCA); err != nil {
 			return nil, nil, trace.Wrap(err)
 		}
@@ -287,8 +310,7 @@ func Init(cfg InitConfig, opts ...AuthServerOption) (*AuthServer, *Identity, err
 		if err != nil {
 			return nil, nil, trace.Wrap(err)
 		}
-
-		hostCA := &services.CertAuthorityV2{
+		hostCA = &services.CertAuthorityV2{
 			Kind:    services.KindCertAuthority,
 			Version: services.V2,
 			Metadata: services.Metadata{
@@ -342,7 +364,7 @@ func Init(cfg InitConfig, opts ...AuthServerOption) (*AuthServer, *Identity, err
 		NodeName: cfg.NodeName,
 		Role:     teleport.RoleAdmin,
 	}
-	identity, err := initKeys(asrv, cfg.DataDir, iid)
+	identity, err := initKeys(asrv, hostCA, cfg.DataDir, iid)
 	if err != nil {
 		return nil, nil, trace.Wrap(err)
 	}
@@ -419,40 +441,23 @@ func isFirstStart(authServer *AuthServer, cfg InitConfig) (bool, error) {
 // initKeys initializes a nodes host certificate. If the certificate does not exist, a request
 // is made to the certificate authority to generate a host certificate and it's written to disk.
 // If a certificate exists on disk, it is read in and returned.
-func initKeys(a *AuthServer, dataDir string, id IdentityID) (*Identity, error) {
+func initKeys(a *AuthServer, hostCA services.CertAuthority, dataDir string, id IdentityID) (*Identity, error) {
 	path := keysPath(dataDir, id)
 
 	keyExists, err := pathExists(path.key)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-
 	sshCertExists, err := pathExists(path.sshCert)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-
 	tlsCertExists, err := pathExists(path.tlsCert)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-
 	if !keyExists || !sshCertExists || !tlsCertExists {
-		packedKeys, err := a.GenerateServerKeys(GenerateServerKeysRequest{
-			HostID:   id.HostUUID,
-			NodeName: id.NodeName,
-			Roles:    teleport.Roles{id.Role},
-		})
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-
-		log.Debugf("Writing keys to disk for %v.", id)
-		if len(packedKeys.TLSCACerts) != 1 {
-			return nil, trace.BadParameter("expecting one CA cert, got %v instead", len(packedKeys.TLSCACerts))
-		}
-		err = writeKeys(dataDir, id, packedKeys.Key, packedKeys.Cert, packedKeys.TLSCert, packedKeys.TLSCACerts[0])
-		if err != nil {
+		if err := genAndWriteKeys(a, id, dataDir); err != nil {
 			return nil, trace.Wrap(err)
 		}
 	}
@@ -460,7 +465,39 @@ func initKeys(a *AuthServer, dataDir string, id IdentityID) (*Identity, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return i, nil
+	needsUpdate, err := i.NeedsUpdate(hostCA)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	// identity is current, no need to regen
+	if !needsUpdate {
+		return i, nil
+	}
+	log.Debugf("Issuing certificate authority has been updated, regenerating admin keys")
+	if err := genAndWriteKeys(a, id, dataDir); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return ReadIdentity(dataDir, id)
+}
+
+func genAndWriteKeys(a *AuthServer, id IdentityID, dataDir string) error {
+	packedKeys, err := a.GenerateServerKeys(GenerateServerKeysRequest{
+		HostID:   id.HostUUID,
+		NodeName: id.NodeName,
+		Roles:    teleport.Roles{id.Role},
+	})
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	log.Debugf("Writing keys to disk for %v.", id)
+	if len(packedKeys.TLSCACerts) < 1 {
+		return trace.BadParameter("expecting one CA cert, got %v instead", len(packedKeys.TLSCACerts))
+	}
+	err = writeKeys(dataDir, id, packedKeys.Key, packedKeys.Cert, packedKeys.TLSCert, packedKeys.TLSCACerts[0])
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
 }
 
 // writeKeys saves the key/cert pair for a given domain onto disk. This usually means the
@@ -504,6 +541,36 @@ type Identity struct {
 	ClusterName string
 }
 
+// NeedsUpdate checks if host identity
+// is issued by the current certificate authority (last current issuing
+// certificate authority, not the one that is being rotated)
+func (i *Identity) NeedsUpdate(ca services.CertAuthority) (bool, error) {
+	if len(i.TLSCertBytes) == 0 {
+		return true, nil
+	}
+	keyPair := ca.GetTLSKeyPairs()[0]
+	roots := x509.NewCertPool()
+
+	// add the provided CA certificate to the roots
+	ok := roots.AppendCertsFromPEM(keyPair.Cert)
+	if !ok {
+		return false, trace.BadParameter("could not parse certificate PEM")
+	}
+
+	cert, err := tlsca.ParseCertificatePEM(i.TLSCertBytes)
+	if err != nil {
+		return false, trace.Wrap(err)
+	}
+
+	_, err = cert.Verify(x509.VerifyOptions{Roots: roots})
+	if err != nil {
+		log.Warningf("Failed to verify cert: %#v", err)
+		return true, nil
+	}
+
+	return false, nil
+}
+
 // HasTSLConfig returns true if this identity has TLS certificate and private key
 func (i *Identity) HasTLSConfig() bool {
 	return len(i.TLSCACertBytes) != 0 && len(i.TLSCertBytes) != 0 && len(i.TLSCACertBytes) != 0
@@ -531,7 +598,6 @@ func (i *Identity) TLSConfig() (*tls.Config, error) {
 	if err != nil {
 		return nil, trace.BadParameter("failed to parse private key: %v", err)
 	}
-
 	certPool := x509.NewCertPool()
 	parsedCert, err := tlsca.ParseCertificatePEM(i.TLSCACertBytes)
 	if err != nil {

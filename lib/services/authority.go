@@ -566,12 +566,48 @@ const (
 	RotationStateStandby = "standby"
 	// RotationStateInProgress specifies that rotation is in progress
 	RotationStateInProgress = "in_progress"
+	// RotationPhaseStandby is initial phase of the rotation
+	// means no operations have started
+	RotationPhaseStandby = "standby"
+	// RotationPhaseUpdateClients is a phase of the rotation
+	// when client credentials will have to be updated and reloaded
+	// but servers will use and respond with old credentials
+	// becasue clients have no idea about new credentials at first
+	RotationPhaseUpdateClients = "update_clients"
+	// RotationPhaseUpdateServers is a phase of the rotation
+	// when servers will have to reload and should start serving
+	// TLS and SSH certificates signed by newly issued CA
+	RotationPhaseUpdateServers = "update_servers"
+	// RotationPhaseComplete means rotation is complete
+	// both clients and servers are using new certificates
+	RotationPhaseComplete = "complete"
+	// RotationPhaseRollback means that rotation is rolling
+	// back to the old certificate authority
+	RotationPhaseRollback = "rollback"
+	// RotationModeManual is a manual rotation mode when all phases
+	// are set automatically
+	RotationModeManual = "manual"
+	// RotationModeAuto is set to go through all phases by the schedule
+	RotationModeAuto = "auto"
 )
+
+// RotatePhases lists all supported rotation phases,
+// used to show help
+var RotatePhases = []string{
+	RotationPhaseUpdateClients,
+	RotationPhaseUpdateServers,
+	RotationPhaseRollback,
+	RotationPhaseComplete,
+}
 
 // Rotation is a status of the rotation of the certificate authority
 type Rotation struct {
 	// State could be one of "init", means not active or "in_progress"
 	State string `json:"state,omitempty"`
+	// Phase is a current rotation phase
+	Phase string `json:"phase,omitempty"`
+	// Mode sets manual or automatic rotation mode
+	Mode string `json:"manual,omitempty"`
 	// CurrentID is the ID of the rotation operation
 	// to differentiate between rotation attempts
 	CurrentID string `json:"current_id"`
@@ -582,10 +618,34 @@ type Rotation struct {
 	// GracePeriod is a period during which old and new CA
 	// are valid for checking purposes, but only new CA is issuing certificates
 	GracePeriod Duration `json:"grace_period,omitempty"`
-	// AutoPeriod if set, is going to auto rotate the certificate authority
-	AutoPeriod Duration `json:"auto_period,omitempty"`
 	// LastRotated specifies the last time of the completed rotation
 	LastRotated time.Time `json:"last_rotated,omitempty"`
+}
+
+// LastRotatedDescription returns human friendly descriptoin
+func (r *Rotation) LastRotatedDescription() string {
+	if r.LastRotated.IsZero() {
+		return "never updated"
+	}
+	return fmt.Sprintf("last rotated %v", r.LastRotated.Format(teleport.HumanDateFormatSeconds))
+}
+
+// PhaseDescription returns human friendly description of a current rotation phase
+func (r *Rotation) PhaseDescription() string {
+	switch r.Phase {
+	case RotationPhaseStandby, "":
+		return "rotation is in standby mode, no action taken"
+	case RotationPhaseUpdateClients:
+		return "clients are getting new certificates and reconnecting"
+	case RotationPhaseUpdateServers:
+		return "servers are getting new certificates and reloading"
+	case RotationPhaseComplete:
+		return "rotation is complete"
+	case RotationPhaseRollback:
+		return "rotation is rolling back"
+	default:
+		return fmt.Sprintf("unknown phase: %q", r.Phase)
+	}
 }
 
 // String returns user friendly information about certificate authority
@@ -597,9 +657,10 @@ func (r *Rotation) String() string {
 		}
 		return fmt.Sprintf("last rotated %v", r.LastRotated.Format(teleport.HumanDateFormatSeconds))
 	case RotationStateInProgress:
-		return fmt.Sprintf("graceful rotation started %v, going to complete %v",
+		return fmt.Sprintf("graceful rotation started %v, going to complete %v, currently %v",
 			r.Started.Format(teleport.HumanDateFormatSeconds),
-			r.Started.Add(r.GracePeriod.Duration).Format(teleport.HumanDateFormatSeconds))
+			r.Started.Add(r.GracePeriod.Duration).Format(teleport.HumanDateFormatSeconds),
+			r.PhaseDescription())
 	default:
 		return "unknown"
 	}
@@ -607,6 +668,16 @@ func (r *Rotation) String() string {
 
 // CheckAndSetDefaults checks and sets default rotation parameters
 func (r *Rotation) CheckAndSetDefaults() error {
+	switch r.Phase {
+	case "", RotationPhaseComplete, RotationPhaseRollback, RotationPhaseUpdateClients, RotationPhaseUpdateServers:
+	default:
+		return trace.BadParameter("unsupported phase: %q", r.Phase)
+	}
+	switch r.Mode {
+	case "", RotationModeAuto, RotationModeManual:
+	default:
+		return trace.BadParameter("unsupported mode: %q", r.Mode)
+	}
 	switch r.State {
 	case "":
 		r.State = RotationStateStandby
@@ -692,10 +763,11 @@ const CertAuthoritySpecV2Schema = `{
       "additionalProperties": false,
       "properties": {
         "state": {"type": "string"},
+        "phase": {"type": "string"},
+        "mode": {"type": "string"},
         "current_id": {"type": "string"},
         "started": {"type": "string"},
         "grace_period": {"type": "string"},
-        "auto_period": {"type": "string"},
         "last_rotated": {"type": "string"}
       }
     },

@@ -40,6 +40,8 @@ type AuthCommand struct {
 
 	rotateGracePeriod time.Duration
 	rotateType        string
+	rotateManualMode  bool
+	rotateTargetPhase string
 
 	authGenerate *kingpin.CmdClause
 	authExport   *kingpin.CmdClause
@@ -71,9 +73,11 @@ func (a *AuthCommand) Initialize(app *kingpin.Application, config *service.Confi
 	a.authSign.Flag("ttl", "TTL (time to live) for the generated certificate").Default(fmt.Sprintf("%v", defaults.CertDuration)).DurationVar(&a.genTTL)
 	a.authSign.Flag("compat", "OpenSSH compatibility flag").StringVar(&a.compatibility)
 
-	a.authRotate = auth.Command("rotate", "Rotate certificate authorities in the cluster.")
-	a.authRotate.Flag("grace-period", "Grace period keeps previous certificate authorities signatures valid. If set to 0 will force users to relogin and nodes to re-register.").Default(fmt.Sprintf("%v", defaults.RotationGracePeriod)).DurationVar(&a.rotateGracePeriod)
+	a.authRotate = auth.Command("rotate", "Rotate certificate authorities in the cluster")
+	a.authRotate.Flag("grace-period", "Grace period keeps previous certificate authorities signatures valid, if set to 0 will force users to relogin and nodes to re-register.").Default(fmt.Sprintf("%v", defaults.RotationGracePeriod)).DurationVar(&a.rotateGracePeriod)
+	a.authRotate.Flag("manual", "Activate manual rotation , set rotation phases manually").BoolVar(&a.rotateManualMode)
 	a.authRotate.Flag("type", "Certificate authority to rotate, rotates both host and user CA by default").StringVar(&a.rotateType)
+	a.authRotate.Flag("phase", fmt.Sprintf("Target rotation phase to set, used in manual rotation, one of: %v", strings.Join(services.RotatePhases, ", "))).StringVar(&a.rotateTargetPhase)
 }
 
 // TryRun takes the CLI command as an argument (like "auth gen") and executes it
@@ -250,6 +254,12 @@ func (a *AuthCommand) RotateCertAuthority(client auth.ClientI) error {
 	req := auth.RotateRequest{
 		Type:        services.CertAuthType(a.rotateType),
 		GracePeriod: &a.rotateGracePeriod,
+		TargetPhase: a.rotateTargetPhase,
+	}
+	if a.rotateManualMode {
+		req.Mode = services.RotationModeManual
+	} else {
+		req.Mode = services.RotationModeAuto
 	}
 	if err := client.RotateCertAuthority(req); err != nil {
 		return err
