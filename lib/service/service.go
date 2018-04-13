@@ -113,6 +113,10 @@ const (
 	// TeleportExitEvent is generated when the Teleport process begins closing
 	// all listening sockets and exiting.
 	TeleportExitEvent = "TeleportExit"
+
+	// TeleportReloadEvent is generated when the Teleport process needs
+	// to reload its configuration
+	TeleportReloadEvent = "TeleportReload"
 )
 
 // RoleConfig is a configuration for a server role (either proxy or node)
@@ -128,8 +132,12 @@ type RoleConfig struct {
 // Connector has all resources process needs to connect
 // to other parts of the cluster: client and identity
 type Connector struct {
-	Identity *auth.Identity
-	Client   *auth.Client
+	// ClientIdentity is the identity to be used in client connections
+	ClientIdentity *auth.Identity
+	// ServerIdentity is the identity to be used in servers
+	ServerIdentity *auth.Identity
+	// Client is authenticated client
+	Client *auth.Client
 }
 
 // TeleportProcess structure holds the state of the Teleport daemon, controlling
@@ -149,6 +157,10 @@ type TeleportProcess struct {
 
 	// identities of this process (credentials to auth sever, basically)
 	Identities map[teleport.Role]*auth.Identity
+
+	// connectors is a list of connected clients and their identities
+	connectors map[teleport.Role]*Connector
+
 	// registeredListeners keeps track of all listeners created by the process
 	// used to pass listeners to child processes during live reload
 	registeredListeners []RegisteredListener
@@ -160,6 +172,9 @@ type TeleportProcess struct {
 	// during restart used to collect their status in case if the
 	// child process crashed.
 	forkedPIDs []int
+
+	// storage is a server local storage
+	storage *auth.ProcessStorage
 }
 
 // GetAuthServer returns the process' auth server
@@ -196,22 +211,25 @@ func (process *TeleportProcess) findStaticIdentity(id auth.IdentityID) (*auth.Id
 	return nil, trace.NotFound("identity %v not found", &id)
 }
 
-// readIdentity reads identity from disk and resets the local state
-func (process *TeleportProcess) readIdentity(role teleport.Role) (*auth.Identity, error) {
+// getConnectors returns a copy of the identities registered for auth server
+func (process *TeleportProcess) getConnectors() []*Connector {
 	process.Lock()
 	defer process.Unlock()
 
-	id := auth.IdentityID{
-		Role:     role,
-		HostUUID: process.Config.HostUUID,
-		NodeName: process.Config.Hostname,
+	out := make([]*Connector, 0, len(process.connectors))
+	for role := range process.connectors {
+		out = append(out, process.connectors[role])
 	}
-	identity, err := auth.ReadIdentity(process.Config.DataDir, id)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	process.Identities[role] = identity
-	return identity, nil
+	return out
+}
+
+// addConnector adds connector to registered connectors list,
+// it will overwrite the connector for the same role
+func (process *TeleportProcess) addConnector(connector *Connector) {
+	process.Lock()
+	defer process.Unlock()
+
+	process.connectors[connector.ClientIdentity.ID.Role] = connector
 }
 
 // GetIdentity returns the process identity (credentials to the auth server) for a given
@@ -228,12 +246,12 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 		return i, nil
 	}
 
+	i, err = process.storage.ReadIdentity(auth.IdentityCurrent, role)
 	id := auth.IdentityID{
 		Role:     role,
 		HostUUID: process.Config.HostUUID,
 		NodeName: process.Config.Hostname,
 	}
-	i, err = auth.ReadIdentity(process.Config.DataDir, id)
 	if err != nil {
 		if trace.IsNotFound(err) {
 			// try to locate static identity provided in the file
@@ -242,74 +260,19 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 				return nil, trace.Wrap(err)
 			}
 			log.Infof("Found static identity %v in the config file, writing to disk.", &id)
-			if err = auth.WriteIdentity(process.Config.DataDir, i); err != nil {
+			if err = process.storage.WriteIdentity(auth.IdentityCurrent, *i); err != nil {
 				return nil, trace.Wrap(err)
 			}
 		} else {
 			return nil, trace.Wrap(err)
 		}
 	}
+	// this information is not allways present in the certificates,
+	// so augment it here
+	i.ID.HostUUID = process.Config.HostUUID
+	i.ID.NodeName = process.Config.Hostname
 	process.Identities[role] = i
 	return i, nil
-}
-
-// connectToAuthService attempts to login into the auth servers specified in the
-// configuration. Returns 'true' if successful
-func (process *TeleportProcess) connectToAuthService(role teleport.Role, additionalPrincipals []string) (*Connector, error) {
-	identity, err := process.GetIdentity(role)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	tlsConfig, err := identity.TLSConfig()
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	log.Infof("Connecting to the cluster %v with TLS client certificate.", identity.ClusterName)
-	client, err := auth.NewTLSClient(process.Config.AuthServers, tlsConfig)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	if len(additionalPrincipals) != 0 && !identity.HasPrincipals(additionalPrincipals) {
-		log.Infof("Identity %v needs principals %v, going to re-register.", identity.ID, additionalPrincipals)
-		if err := auth.ReRegister(process.Config.DataDir, client, identity.ID, additionalPrincipals); err != nil {
-			return nil, trace.Wrap(err)
-		}
-		if identity, err = process.readIdentity(role); err != nil {
-			return nil, trace.Wrap(err)
-		}
-		tlsConfig, err = identity.TLSConfig()
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-	}
-	/*
-		// check if there is a need to re-register with new client credentials
-		ca, err := client.GetCertAuthority(services.CertAuthID{
-			DomainName: identity.ClusterName,
-			Type:       services.HostCA,
-		}, false)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		needsUpdate, err := identity.NeedsUpdate(ca)
-		if err != nil {
-			return nil, trace.Wrap(err)
-		}
-		if needsUpdate {
-			log.Infof("Certificate authority has been updated, going to re-register %v.", identity.ID)
-			if err := auth.ReRegister(process.Config.DataDir, client, identity.ID, additionalPrincipals); err != nil {
-				return nil, trace.Wrap(err)
-			}
-			if identity, err = process.readIdentity(role); err != nil {
-				return nil, trace.Wrap(err)
-			}
-			tlsConfig, err = identity.TLSConfig()
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
-		}*/
-	// success ? we're logged in!
-	return &Connector{Client: client, Identity: identity}, nil
 }
 
 // NewTeleport takes the daemon configuration, instantiates all required services
@@ -371,12 +334,19 @@ func NewTeleport(cfg *Config) (*TeleportProcess, error) {
 		}
 	}
 
+	storage, err := auth.NewProcessStorage(filepath.Join(cfg.DataDir, "process"))
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
 	process := &TeleportProcess{
 		Clock:               clockwork.NewRealClock(),
 		Supervisor:          NewSupervisor(),
 		Config:              cfg,
 		Identities:          make(map[teleport.Role]*auth.Identity),
+		connectors:          make(map[teleport.Role]*Connector),
 		importedDescriptors: importedDescriptors,
+		storage:             storage,
 	}
 
 	serviceStarted := false
@@ -421,6 +391,10 @@ func NewTeleport(cfg *Config) (*TeleportProcess, error) {
 	} else {
 		warnOnErr(process.closeImportedDescriptors(teleport.ComponentProxy))
 	}
+
+	// TODO: klizhentas heartbeat the current state so tctl get nodes will report it
+	// sync rotation state periodically
+	process.RegisterFunc("common.rotate", process.periodicSyncRotationState)
 
 	if !serviceStarted {
 		return nil, trace.BadParameter("all services failed to start")
@@ -714,7 +688,7 @@ func (process *TeleportProcess) initAuthService() error {
 	process.RegisterFunc("auth.heartbeat.broadcast", func() error {
 		// Heart beat auth server presence, this is not the best place for this
 		// logic, consolidate it into auth package later
-		connector, err := process.connectToAuthService(teleport.RoleAdmin, nil)
+		connector, err := process.connectToAuthService(teleport.RoleAdmin)
 		if err != nil {
 			return trace.Wrap(err)
 		}
@@ -853,8 +827,7 @@ func (process *TeleportProcess) newLocalCache(clt auth.ClientI, cacheName []stri
 
 // initSSH initializes the "node" role, i.e. a simple SSH server connected to the auth server.
 func (process *TeleportProcess) initSSH() error {
-	process.RegisterWithAuthServer(
-		process.Config.Token, teleport.RoleNode, SSHIdentityEvent, nil)
+	process.RegisterWithAuthServer(process.Config.Token, teleport.RoleNode, SSHIdentityEvent)
 	eventsC := make(chan Event)
 	process.WaitForEvent(SSHIdentityEvent, eventsC, make(chan struct{}))
 
@@ -967,7 +940,7 @@ func (process *TeleportProcess) initSSH() error {
 // RegisterWithAuthServer uses one time provisioning token obtained earlier
 // from the server to get a pair of SSH keys signed by Auth server host
 // certificate authority
-func (process *TeleportProcess) RegisterWithAuthServer(token string, role teleport.Role, eventName string, additionalPrincipals []string) {
+func (process *TeleportProcess) RegisterWithAuthServer(token string, role teleport.Role, eventName string) {
 	cfg := process.Config
 	identityID := auth.IdentityID{Role: role, HostUUID: cfg.HostUUID, NodeName: cfg.Hostname}
 
@@ -978,7 +951,7 @@ func (process *TeleportProcess) RegisterWithAuthServer(token string, role telepo
 	process.RegisterFunc(fmt.Sprintf("register.%v", strings.ToLower(role.String())), func() error {
 		retryTime := defaults.ServerHeartbeatTTL / 3
 		for {
-			connector, err := process.connectToAuthService(role, additionalPrincipals)
+			connector, err := process.connectToAuthService(role)
 			if err == nil {
 				process.BroadcastEvent(Event{Name: eventName, Payload: connector})
 				authClient = connector.Client
@@ -1137,6 +1110,18 @@ func (process *TeleportProcess) initDiagnosticService() error {
 	return nil
 }
 
+// getAdditionalPrincipals returns a list of additional principals set up for role
+func (process *TeleportProcess) getAdditionalPrincipals(role teleport.Role) ([]string, error) {
+	if process.Config.Proxy.PublicAddr.Addr != "" {
+		host, err := utils.Host(process.Config.Proxy.PublicAddr.Addr)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return []string{host}
+	}
+	return nil
+}
+
 // initProxy gets called if teleport runs with 'proxy' role enabled.
 // this means it will do two things:
 //    1. serve a web UI
@@ -1150,17 +1135,7 @@ func (process *TeleportProcess) initProxy() error {
 			return trace.Wrap(err)
 		}
 	}
-
-	var additionalPrincipals []string
-	if process.Config.Proxy.PublicAddr.Addr != "" {
-		host, err := utils.Host(process.Config.Proxy.PublicAddr.Addr)
-		if err != nil {
-			return trace.Wrap(err)
-		}
-		additionalPrincipals = []string{host}
-	}
-
-	process.RegisterWithAuthServer(process.Config.Token, teleport.RoleProxy, ProxyIdentityEvent, additionalPrincipals)
+	process.RegisterWithAuthServer(process.Config.Token, teleport.RoleProxy, ProxyIdentityEvent)
 	process.RegisterFunc("proxy.init", func() error {
 		eventsC := make(chan Event)
 		process.WaitForEvent(ProxyIdentityEvent, eventsC, make(chan struct{}))
@@ -1558,12 +1533,17 @@ func (process *TeleportProcess) Close() error {
 
 	process.Config.Keygen.Close()
 
+	var errors []error
 	localAuth := process.getLocalAuth()
 	if localAuth != nil {
-		return trace.Wrap(process.localAuth.Close())
+		errors = append(errors, process.localAuth.Close())
 	}
 
-	return nil
+	if process.storage != nil {
+		errors = append(errors, process.storage.Close())
+	}
+
+	return trace.NewAggregate(errors...)
 }
 
 func validateConfig(cfg *Config) error {

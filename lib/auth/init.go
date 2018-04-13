@@ -530,9 +530,9 @@ type Identity struct {
 	CertBytes []byte
 	// TLSCertBytes is a PEM encoded TLS x509 client certificate
 	TLSCertBytes []byte
-	// TLSCACertBytes is a PEM encoded TLS x509 certificate of certificate authority
+	// TLSCACertBytes is a list of PEM encoded TLS x509 certificate of certificate authority
 	// associated with auth server services
-	TLSCACertBytes []byte
+	TLSCACertsBytes [][]byte
 	// KeySigner is an SSH host certificate signer
 	KeySigner ssh.Signer
 	// Cert is a parsed SSH certificate
@@ -573,7 +573,7 @@ func (i *Identity) NeedsUpdate(ca services.CertAuthority) (bool, error) {
 
 // HasTSLConfig returns true if this identity has TLS certificate and private key
 func (i *Identity) HasTLSConfig() bool {
-	return len(i.TLSCACertBytes) != 0 && len(i.TLSCertBytes) != 0 && len(i.TLSCACertBytes) != 0
+	return len(i.TLSCACertsBytes) != 0 && len(i.TLSCertBytes) != 0
 }
 
 // HasPrincipals returns whether identity has principals
@@ -599,11 +599,13 @@ func (i *Identity) TLSConfig() (*tls.Config, error) {
 		return nil, trace.BadParameter("failed to parse private key: %v", err)
 	}
 	certPool := x509.NewCertPool()
-	parsedCert, err := tlsca.ParseCertificatePEM(i.TLSCACertBytes)
-	if err != nil {
-		return nil, trace.Wrap(err, "failed to parse CA certificate")
+	for j := range i.TLSCACertsBytes {
+		parsedCert, err := tlsca.ParseCertificatePEM(i.TLSCACertsBytes[j])
+		if err != nil {
+			return nil, trace.Wrap(err, "failed to parse CA certificate")
+		}
+		certPool.AddCert(parsedCert)
 	}
-	certPool.AddCert(parsedCert)
 	tlsConfig.Certificates = []tls.Certificate{tlsCert}
 	tlsConfig.RootCAs = certPool
 	tlsConfig.ClientCAs = certPool
@@ -637,25 +639,25 @@ func (id *IdentityID) String() string {
 }
 
 // ReadIdentityFromKeyPair reads TLS identity from key pair
-func ReadIdentityFromKeyPair(keyBytes, sshCertBytes, tlsCertBytes, tlsCACertBytes []byte) (*Identity, error) {
+func ReadIdentityFromKeyPair(keyBytes, sshCertBytes, tlsCertBytes []byte, tlsCACertsBytes [][]byte) (*Identity, error) {
 	identity, err := ReadSSHIdentityFromKeyPair(keyBytes, sshCertBytes)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
 	if len(tlsCertBytes) != 0 {
 		// just to verify that identity parses properly for future use
-		_, err := ReadTLSIdentityFromKeyPair(keyBytes, tlsCertBytes, tlsCACertBytes)
+		_, err := ReadTLSIdentityFromKeyPair(keyBytes, tlsCertBytes, tlsCACertsBytes)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
 		identity.TLSCertBytes = tlsCertBytes
-		identity.TLSCACertBytes = tlsCACertBytes
+		identity.TLSCACertsBytes = tlsCACertsBytes
 	}
 	return identity, nil
 }
 
 // ReadTLSIdentityFromKeyPair reads TLS identity from key pair
-func ReadTLSIdentityFromKeyPair(keyBytes, certBytes []byte, caCertBytes []byte) (*Identity, error) {
+func ReadTLSIdentityFromKeyPair(keyBytes, certBytes []byte, caCertsBytes [][]byte) (*Identity, error) {
 	if len(keyBytes) == 0 {
 		return nil, trace.BadParameter("missing private key")
 	}
@@ -677,19 +679,18 @@ func ReadTLSIdentityFromKeyPair(keyBytes, certBytes []byte, caCertBytes []byte) 
 	if len(cert.Issuer.Organization) == 0 {
 		return nil, trace.BadParameter("missing CA organization")
 	}
+
 	clusterName := cert.Issuer.Organization[0]
 	if clusterName == "" {
 		return nil, trace.BadParameter("misssing cluster name")
 	}
-
 	identity := &Identity{
-		ID:             IdentityID{HostUUID: id.Username, Role: teleport.Role(id.Groups[0])},
-		ClusterName:    clusterName,
-		KeyBytes:       keyBytes,
-		TLSCertBytes:   certBytes,
-		TLSCACertBytes: caCertBytes,
+		ID:              IdentityID{HostUUID: id.Username, Role: teleport.Role(id.Groups[0])},
+		ClusterName:     clusterName,
+		KeyBytes:        keyBytes,
+		TLSCertBytes:    certBytes,
+		TLSCACertsBytes: caCertsBytes,
 	}
-
 	_, err = identity.TLSConfig()
 	if err != nil {
 		return nil, trace.Wrap(err)
@@ -802,7 +803,7 @@ func ReadIdentity(dataDir string, id IdentityID) (i *Identity, err error) {
 		}
 	}
 
-	identity, err := ReadIdentityFromKeyPair(keyBytes, sshCertBytes, tlsCertBytes, tlsCACertBytes)
+	identity, err := ReadIdentityFromKeyPair(keyBytes, sshCertBytes, tlsCertBytes, [][]byte{tlsCACertBytes})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}

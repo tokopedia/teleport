@@ -578,9 +578,6 @@ const (
 	// when servers will have to reload and should start serving
 	// TLS and SSH certificates signed by newly issued CA
 	RotationPhaseUpdateServers = "update_servers"
-	// RotationPhaseComplete means rotation is complete
-	// both clients and servers are using new certificates
-	RotationPhaseComplete = "complete"
 	// RotationPhaseRollback means that rotation is rolling
 	// back to the old certificate authority
 	RotationPhaseRollback = "rollback"
@@ -594,10 +591,10 @@ const (
 // RotatePhases lists all supported rotation phases,
 // used to show help
 var RotatePhases = []string{
+	RotationPhaseStandby,
 	RotationPhaseUpdateClients,
 	RotationPhaseUpdateServers,
 	RotationPhaseRollback,
-	RotationPhaseComplete,
 }
 
 // Rotation is a status of the rotation of the certificate authority
@@ -622,6 +619,14 @@ type Rotation struct {
 	LastRotated time.Time `json:"last_rotated,omitempty"`
 }
 
+// Matches returns true if this state rotation matches
+// external rotation - state, phase and rotation ID should all match,
+// notice that matches is not Equals as it does not require
+// all fields to be the same
+func (s *Rotation) Matches(rotation Rotation) bool {
+	return s.CurrentID == rotation.CurrentID && s.State == rotation.State && s.Phase == rotation.Phase
+}
+
 // LastRotatedDescription returns human friendly descriptoin
 func (r *Rotation) LastRotatedDescription() string {
 	if r.LastRotated.IsZero() {
@@ -639,8 +644,6 @@ func (r *Rotation) PhaseDescription() string {
 		return "clients are getting new certificates and reconnecting"
 	case RotationPhaseUpdateServers:
 		return "servers are getting new certificates and reloading"
-	case RotationPhaseComplete:
-		return "rotation is complete"
 	case RotationPhaseRollback:
 		return "rotation is rolling back"
 	default:
@@ -669,7 +672,7 @@ func (r *Rotation) String() string {
 // CheckAndSetDefaults checks and sets default rotation parameters
 func (r *Rotation) CheckAndSetDefaults() error {
 	switch r.Phase {
-	case "", RotationPhaseComplete, RotationPhaseRollback, RotationPhaseUpdateClients, RotationPhaseUpdateServers:
+	case "", RotationPhaseRollback, RotationPhaseUpdateClients, RotationPhaseUpdateServers:
 	default:
 		return trace.BadParameter("unsupported phase: %q", r.Phase)
 	}
@@ -758,20 +761,22 @@ const CertAuthoritySpecV2Schema = `{
         }
       }
     },
-    "rotation": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "state": {"type": "string"},
-        "phase": {"type": "string"},
-        "mode": {"type": "string"},
-        "current_id": {"type": "string"},
-        "started": {"type": "string"},
-        "grace_period": {"type": "string"},
-        "last_rotated": {"type": "string"}
-      }
-    },
+    "rotation": %v,
     "role_map": %v
+  }
+}`
+
+const RotationSchema = `{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "state": {"type": "string"},
+    "phase": {"type": "string"},
+    "mode": {"type": "string"},
+    "current_id": {"type": "string"},
+    "started": {"type": "string"},
+    "grace_period": {"type": "string"},
+    "last_rotated": {"type": "string"}
   }
 }`
 
@@ -869,7 +874,7 @@ type CertAuthorityMarshaler interface {
 
 // GetCertAuthoritySchema returns JSON Schema for cert authorities
 func GetCertAuthoritySchema() string {
-	return fmt.Sprintf(V2SchemaTemplate, MetadataSchema, fmt.Sprintf(CertAuthoritySpecV2Schema, RoleMapSchema), DefaultDefinitions)
+	return fmt.Sprintf(V2SchemaTemplate, MetadataSchema, fmt.Sprintf(CertAuthoritySpecV2Schema, RotationSchema, RoleMapSchema), DefaultDefinitions)
 }
 
 type TeleportCertAuthorityMarshaler struct{}

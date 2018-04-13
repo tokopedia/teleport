@@ -194,7 +194,7 @@ func processRotationRequest(req RotateRequest) (services.CertAuthority, error) {
 		}
 		// this is to complete rotation, moves overall rotation
 		// to standby
-	case services.RotationPhaseComplete:
+	case services.RotationPhaseStandby:
 		switch rotation.Phase {
 		case services.RotationPhaseUpdateServers:
 			if err := completeRotation(req.clock, ca); err != nil {
@@ -280,7 +280,10 @@ func startRollingBackRotation(ca services.CertAuthority) error {
 	// and keep only public keys/certs for the new CA
 	signingKeys = [][]byte{signingKeys[1]}
 	checkingKeys = [][]byte{checkingKeys[1]}
-	keyPairs = []services.TLSKeyPair{keyPairs[1]}
+
+	// here, keep the attempted key pair certificate as trusted
+	// as during rollback phases, both types of clients may be present in the cluster
+	keyPairs = []services.TLSKeyPair{keyPairs[1], TLSKeyPair{Cert: keyPairs[0].Cert}}
 	rotation.State = services.RotationStateInProgress
 	rotation.Phase = services.RotationPhaseRollback
 
@@ -302,6 +305,12 @@ func completeRollingBackRotation(clock clockwork.Clock, ca services.CertAuthorit
 	rotation.State = services.RotationStateStandby
 	rotation.Phase = services.RotationPhaseStandby
 
+	keyPairs := ca.GetTLSKeyPairs()
+	// only keep the original certificate authority as trusted
+	// and remove all extra
+	keyPairs = []services.TLSKeyPair{keyPairs[0]}
+
+	ca.SetTLSKeyPairs(keyPairs)
 	ca.SetRotation(rotation)
 	return nil
 }
