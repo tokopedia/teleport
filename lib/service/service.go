@@ -138,6 +138,27 @@ type Connector struct {
 	ServerIdentity *auth.Identity
 	// Client is authenticated client
 	Client *auth.Client
+	// AuthServer is auth server, used for connector
+	// associated with auth server
+	AuthServer *auth.AuthServer
+}
+
+// ReRegister receives new identity credentials for proxy, node and auth server
+// in case of auth server the role is 'TeleportAdmin' and instead of using
+// client it uses the local auth server
+func (c *Connector) ReRegister(additionalPrincipals []string) (*auth.Identity, error) {
+	if c.ClientIdentity.ID.Role == teleport.RoleAdmin {
+		return auth.GenerateIdentity(c.AuthServer, c.ClientIdentity.ID, additionalPrincipals)
+	}
+	return auth.ReRegister(c.Client, c.ClientIdentity.ID, additionalPrincipals)
+}
+
+func (c *Connector) GetCertAuthority(id services.CertAuthID, loadPrivateKeys bool) (services.CertAuthority, error) {
+	if conn.ClientIdentity.Role == teleport.RoleAdmin {
+		return c.AuthServer.GetCertAuthority(id, loadPrivateKeys)
+	} else {
+		return c.Client.GetCertAuthority(id, loadPrivateKeys)
+	}
 }
 
 // TeleportProcess structure holds the state of the Teleport daemon, controlling
@@ -253,7 +274,15 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 		NodeName: process.Config.Hostname,
 	}
 	if err != nil {
-		if trace.IsNotFound(err) {
+		if !trace.IsNotFound(err) {
+			return nil, trace.Wrap(err)
+		}
+		if role == teleport.RoleAdmin {
+			// for admin identity use local auth server
+			// because admin identity is requested by auth server
+			// itself
+			i, err = auth.GenerateIdentity(process.getLocalAuth(), id)
+		} else {
 			// try to locate static identity provided in the file
 			i, err = process.findStaticIdentity(id)
 			if err != nil {
@@ -263,8 +292,6 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 			if err = process.storage.WriteIdentity(auth.IdentityCurrent, *i); err != nil {
 				return nil, trace.Wrap(err)
 			}
-		} else {
-			return nil, trace.Wrap(err)
 		}
 	}
 	// this information is not allways present in the certificates,
@@ -573,7 +600,7 @@ func (process *TeleportProcess) initAuthService() error {
 	}
 
 	// first, create the AuthServer
-	authServer, identity, err := auth.Init(auth.InitConfig{
+	authServer, err := auth.Init(auth.InitConfig{
 		Backend:              b,
 		Authority:            cfg.Keygen,
 		ClusterConfiguration: cfg.ClusterConfiguration,
@@ -596,6 +623,11 @@ func (process *TeleportProcess) initAuthService() error {
 		OIDCConnectors:       cfg.OIDCConnectors,
 		AuditLog:             process.auditLog,
 	})
+	if err != nil {
+		return trace.Wrap(err)
+	}
+
+	connector, err := process.connectToAuthService(teleport.RoleAdmin)
 	if err != nil {
 		return trace.Wrap(err)
 	}

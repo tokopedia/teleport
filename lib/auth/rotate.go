@@ -283,7 +283,7 @@ func startRollingBackRotation(ca services.CertAuthority) error {
 
 	// here, keep the attempted key pair certificate as trusted
 	// as during rollback phases, both types of clients may be present in the cluster
-	keyPairs = []services.TLSKeyPair{keyPairs[1], TLSKeyPair{Cert: keyPairs[0].Cert}}
+	keyPairs = []services.TLSKeyPair{keyPairs[1], services.TLSKeyPair{Cert: keyPairs[0].Cert}}
 	rotation.State = services.RotationStateInProgress
 	rotation.Phase = services.RotationPhaseRollback
 
@@ -301,7 +301,6 @@ func completeRollingBackRotation(clock clockwork.Clock, ca services.CertAuthorit
 
 	// second part of the function rotates the certificate authority
 	rotation.Started = time.Time{}
-	rotation.CurrentID = ""
 	rotation.State = services.RotationStateStandby
 	rotation.Phase = services.RotationPhaseStandby
 
@@ -327,7 +326,6 @@ func completeRotation(clock clockwork.Clock, ca services.CertAuthority) error {
 	keyPairs = keyPairs[:1]
 
 	rotation.Started = time.Time{}
-	rotation.CurrentID = ""
 	rotation.State = services.RotationStateStandby
 	rotation.Phase = services.RotationPhaseStandby
 	rotation.LastRotated = clock.Now()

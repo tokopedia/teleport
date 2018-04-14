@@ -1,52 +1,14 @@
 package service
 
 import (
-	"context"
-	"crypto/tls"
-	"fmt"
-	"io"
-	"io/ioutil"
-	"net"
-	"net/http"
-	"net/http/pprof"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
-	"github.com/gravitational/teleport/lib/auth/native"
-	"github.com/gravitational/teleport/lib/backend"
-	"github.com/gravitational/teleport/lib/backend/boltbk"
-	"github.com/gravitational/teleport/lib/backend/dir"
-	"github.com/gravitational/teleport/lib/backend/dynamo"
-	"github.com/gravitational/teleport/lib/backend/etcdbk"
 	"github.com/gravitational/teleport/lib/defaults"
-	"github.com/gravitational/teleport/lib/events"
-	"github.com/gravitational/teleport/lib/events/dynamoevents"
-	"github.com/gravitational/teleport/lib/events/filesessions"
-	"github.com/gravitational/teleport/lib/events/s3sessions"
-	"github.com/gravitational/teleport/lib/limiter"
-	"github.com/gravitational/teleport/lib/multiplexer"
-	"github.com/gravitational/teleport/lib/reversetunnel"
 	"github.com/gravitational/teleport/lib/services"
-	"github.com/gravitational/teleport/lib/session"
-	"github.com/gravitational/teleport/lib/srv/regular"
-	"github.com/gravitational/teleport/lib/state"
-	"github.com/gravitational/teleport/lib/system"
 	"github.com/gravitational/teleport/lib/utils"
-	"github.com/gravitational/teleport/lib/web"
 	"github.com/gravitational/trace"
-
-	"github.com/gravitational/roundtrip"
-	"github.com/jonboulle/clockwork"
-	"github.com/pborman/uuid"
-	"github.com/sirupsen/logrus"
 )
 
 // connectToAuthService attempts to login into the auth servers specified in the
@@ -66,40 +28,27 @@ func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) 
 		return nil, trace.Wrap(err)
 	}
 
-	additionalPrincipals, err := process.getAdditionalPrincipals(role)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-
 	state, err := process.storage.GetState(role)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	rotation := state.Rotation
+	rotation := state.Spec.Rotation
 
 	switch rotation.State {
-	// rotation is on standby, so just use whatever re
-	case "", state.RotationStateStandby:
+	// rotation is on standby, so just use whatever is current
+	case "", services.RotationStateStandby:
+		// admin is a bit special, as it does not need clients
+		if role == teleport.RoleAdmin {
+			return &Connector{
+				ClientIdentity: identity,
+				ServerIdentity: identity,
+				AuthServer:     process.getLocalAuth(),
+			}, nil
+		}
 		log.Infof("Connecting to the cluster %v with TLS client certificate.", identity.ClusterName)
 		client, err := newClient(process.Config.AuthServers, identity)
 		if err != nil {
 			return nil, trace.Wrap(err)
-		}
-		// check if need to re-register to get certificate with new principals
-		if len(additionalPrincipals) != 0 && !identity.HasPrincipals(additionalPrincipals) {
-			log.Infof("Identity %v needs principals %v, going to re-register.", identity.ID, additionalPrincipals)
-			identity, err = auth.ReRegister(process.Config.DataDir, client, identity.ID, additionalPrincipals)
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
-			err := process.storage.WriteIdentity(auth.IdentityCurrent, identity)
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
-			client, err = newClient(process.Config.AuthServers, identity)
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
 		}
 		return &Connector{Client: client, ClientIdentity: identity, ServerIdentity: identity}, nil
 	case services.RotationStateInProgress:
@@ -111,11 +60,22 @@ func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) 
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
+			if role == teleport.RoleAdmin {
+				return &Connector{
+					ClientIdentity: newIdentity,
+					ServerIdentity: identity,
+					AuthServer:     process.getLocalAuth(),
+				}, nil
+			}
 			client, err := newClient(process.Config.AuthServers, newIdentity)
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
-			return &Connector{Client: client, ClientIdentity: newIdentity, ServerIdentity: identity}, nil
+			return &Connector{
+				Client:         client,
+				ClientIdentity: newIdentity,
+				ServerIdentity: identity,
+			}, nil
 		case services.RotationPhaseUpdateServers:
 			// in this phase, servers and clients are using new identity, but the
 			// identity is still set up to trust the old certificate authority certificates
@@ -123,26 +83,48 @@ func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) 
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
+			if role == teleport.RoleAdmin {
+				return &Connector{
+					ClientIdentity: newIdentity,
+					ServerIdentity: newIdentity,
+					AuthServer:     process.getLocalAuth(),
+				}, nil
+			}
 			client, err := newClient(process.Config.AuthServers, newIdentity)
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
-			return &Connector{Client: client, ClientIdentity: newIdentity, ServerIdentity: newIdentity}, nil
+			return &Connector{
+				Client:         client,
+				ClientIdentity: newIdentity,
+				ServerIdentity: newIdentity,
+			}, nil
 		case services.RotationPhaseRollback:
 			// in rollback phase, clients and servers should switch back
 			// to the old certificate authority-issued credentials,
 			// but new certificate authority should be trusted
 			// because not all clients can update at the same time
+			if role == teleport.RoleAdmin {
+				return &Connector{
+					ClientIdentity: identity,
+					ServerIdentity: identity,
+					AuthServer:     process.getLocalAuth(),
+				}, nil
+			}
 			client, err := newClient(process.Config.AuthServers, identity)
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
-			return &Connector{Client: client, ClientIdentity: identity, ServerIdentity: identity}, nil
+			return &Connector{
+				Client:         client,
+				ClientIdentity: identity,
+				ServerIdentity: identity,
+			}, nil
 		default:
-			return nil, trace.BadParameter("unsupported rotation phase: %q", state)
+			return nil, trace.BadParameter("unsupported rotation phase: %q", rotation.Phase)
 		}
 	default:
-		return nil, trace.BadParameter("unsupported rotation state: %q", state.State)
+		return nil, trace.BadParameter("unsupported rotation state: %q", rotation.State)
 	}
 }
 
@@ -174,7 +156,7 @@ func (process *TeleportProcess) syncRotationState() (bool, error) {
 	var needsReload bool
 	connectors := process.getConnectors()
 	for _, conn := range connectors {
-		reload, err := process.syncServiceRotationState(conn.ClientIdentity.ID, conn.Client)
+		reload, err := process.syncServiceRotationState(conn)
 		if err != nil {
 			return false, trace.Wrap(err)
 		}
@@ -187,25 +169,24 @@ func (process *TeleportProcess) syncRotationState() (bool, error) {
 
 // syncServiceRotationState syncs up rotation state for individual service (Auth, Proxy, Node) and
 // if necessary, updates credentials. Returns true if the service will need to reload.
-func (process *TeleportProcess) syncServiceRotationState(identityID auth.IdentityID, client auth.ClientI) (bool, error) {
-	state, err := process.storage.GetState(role)
+func (process *TeleportProcess) syncServiceRotationState(conn *Connector) (bool, error) {
+	state, err := process.storage.GetState(conn.ClientIdentity.ID.Role)
 	if err != nil {
-		return trace.Wrap(err)
+		return false, trace.Wrap(err)
 	}
-
-	// check if there is a need to re-register with new client credentials
-	ca, err := client.GetCertAuthority(services.CertAuthID{
-		DomainName: identity.ClusterName,
+	ca, err := conn.GetCertAuthority(services.CertAuthID{
+		DomainName: conn.ClientIdentity.ClusterName,
 		Type:       services.HostCA,
 	}, false)
 	if err != nil {
-		return nil, trace.Wrap(err)
+		return false, trace.Wrap(err)
 	}
-	return process.rotate(identityID, client, state.Rotation, ca.GetRotation())
+	return process.rotate(conn, *state, ca.GetRotation())
 }
 
 // rotate is called to check if rotation should be triggered locally
-func (process *TeleportProcess) rotate(id auth.IdentityID, client auth.ClientI, localState auth.StateV2, remote services.Rotation) (bool, error) {
+func (process *TeleportProcess) rotate(conn *Connector, localState auth.StateV2, remote services.Rotation) (bool, error) {
+	id := conn.ClientIdentity.ID
 	local := localState.Spec.Rotation
 	if local.Matches(remote) {
 		// nothing to do, local state and rotation state are in sync
@@ -214,7 +195,7 @@ func (process *TeleportProcess) rotate(id auth.IdentityID, client auth.ClientI, 
 
 	additionalPrincipals, err := process.getAdditionalPrincipals(id.Role)
 	if err != nil {
-		return trace.Wrap(err)
+		return false, trace.Wrap(err)
 	}
 
 	storage := process.storage
@@ -225,20 +206,59 @@ func (process *TeleportProcess) rotate(id auth.IdentityID, client auth.ClientI, 
 	// several supported scenarios, that this logic should handle
 	switch remote.State {
 	case "", services.RotationStateStandby:
-		//		if local.State
-	//	check current id here and in other places
-
+		switch local.State {
+		// great, nothing to do, it could happen
+		// that the old node came up and missed the whole rotation
+		// rollback cycle, but there is nothing we can do at this point
+		case services.RotationStateStandby:
+			if len(additionalPrincipals) != 0 && !conn.ServerIdentity.HasPrincipals(additionalPrincipals) {
+				log.Infof("%v has updated principals to %q, going to request new principals and update")
+				identity, err := conn.ReRegister(additionalPrincipals)
+				if err != nil {
+					return false, trace.Wrap(err)
+				}
+				err = storage.WriteIdentity(auth.IdentityCurrent, *identity)
+				if err != nil {
+					return false, trace.Wrap(err)
+				}
+				return true, nil
+			}
+			return false, nil
+			// local rotation is in progress, if it has
+			// just rolled back
+		case services.RotationStateInProgress:
+			// rollback phase has completed, all services
+			// will receive new identities
+			if local.Phase != services.RotationPhaseRollback && local.CurrentID != remote.CurrentID {
+				return false, trace.CompareFailed(outOfSync, id.Role, remote, local, id.Role)
+			}
+			identity, err := conn.ReRegister(additionalPrincipals)
+			if err != nil {
+				return false, trace.Wrap(err)
+			}
+			err = storage.WriteIdentity(auth.IdentityCurrent, *identity)
+			if err != nil {
+				return false, trace.Wrap(err)
+			}
+			localState.Spec.Rotation = remote
+			err = storage.WriteState(id.Role, localState)
+			if err != nil {
+				return false, trace.Wrap(err)
+			}
+			return true, nil
+		}
 	case services.RotationStateInProgress:
 		switch remote.Phase {
 		case services.RotationPhaseStandby:
-
+			// nothing to do
+			return false, nil
 		case services.RotationPhaseUpdateClients:
 			// only allow transition in case if local rotation state is standby
 			// so this server is in the "clean" state
 			if local.State != services.RotationStateStandby {
-				return trace.CompareFailed(outOfSync, role, remote, local, id.Role)
+				return trace.CompareFailed(outOfSync, id.Role, remote, local, id.Role)
 			}
-			identity, err := auth.ReRegister(process.Config.DataDir, client, id, additionalPrincipals)
+			identity, err := conn.ReRegister(additionalPrincipals)
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
@@ -270,7 +290,7 @@ func (process *TeleportProcess) rotate(id auth.IdentityID, client auth.ClientI, 
 			// because it will be widely used to recover cluster state to
 			// the previously valid state
 			// client will re-register to receive credentials signed by "old" CA
-			identity, err := auth.ReRegister(process.Config.DataDir, client, id, additionalPrincipals)
+			identity, err := conn.ReRegister(additionalPrincipals)
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
