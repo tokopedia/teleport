@@ -266,13 +266,14 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 	if found {
 		return i, nil
 	}
-
+	log.Infof("SASHA Hear 1")
 	i, err = process.storage.ReadIdentity(auth.IdentityCurrent, role)
 	id := auth.IdentityID{
 		Role:     role,
 		HostUUID: process.Config.HostUUID,
 		NodeName: process.Config.Hostname,
 	}
+	log.Infof("SASHA Hear 2")
 	if err != nil {
 		if !trace.IsNotFound(err) {
 			return nil, trace.Wrap(err)
@@ -285,7 +286,7 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
-			i, err = auth.GenerateIdentity(process.getLocalAuth(), id, principals)
+			i, err = auth.GenerateIdentity(process.localAuth, id, principals)
 		} else {
 			// try to locate static identity provided in the file
 			i, err = process.findStaticIdentity(id)
@@ -298,12 +299,56 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 			}
 		}
 	}
+	log.Infof("SASHA Hear 3")
 	// this information is not allways present in the certificates,
 	// so augment it here
 	i.ID.HostUUID = process.Config.HostUUID
 	i.ID.NodeName = process.Config.Hostname
 	process.Identities[role] = i
 	return i, nil
+}
+
+// Run starts teleport processes, waits for signals
+// and handles internal process signals.
+func Run(ctx context.Context, cfg Config) error {
+	copyCfg := cfg
+	srv, err := NewTeleport(&copyCfg)
+	if err != nil {
+		return trace.Wrap(err, "Initialization failed")
+	}
+	if err := srv.Start(); err != nil {
+		return trace.Wrap(err, "Startup Failed")
+	}
+wait:
+	err = srv.WaitForSignals(ctx)
+	if err != ErrTeleportReloading {
+		return trace.Wrap(err)
+	}
+	fileDescriptors, err := srv.ExportFileDescriptors()
+	if err != nil {
+		warnOnErr(srv.Close())
+		return trace.Wrap(err)
+	}
+	newCfg := cfg
+	newCfg.FileDescriptors = fileDescriptors
+	newSrv, err := NewTeleport(&newCfg)
+	if err != nil {
+		warnOnErr(srv.Close())
+		return trace.Wrap(err, "Reload failed")
+	}
+	if err := newSrv.Start(); err != nil {
+		warnOnErr(srv.Close())
+		return trace.Wrap(err, "Startup of a reloaded process failed")
+	}
+	timeoutCtx, cancel := context.WithTimeout(ctx, defaults.DefaultIdleConnectionDuration*2)
+	defer cancel()
+	srv.Shutdown(timeoutCtx)
+	if timeoutCtx.Err() == context.DeadlineExceeded {
+		warnOnErr(srv.Close())
+		return trace.Wrap(err, "Failed to shutdown the parent process")
+	}
+	srv = newSrv
+	goto wait
 }
 
 // NewTeleport takes the daemon configuration, instantiates all required services
@@ -325,9 +370,11 @@ func NewTeleport(cfg *Config) (*TeleportProcess, error) {
 		}
 	}
 
-	importedDescriptors, err := importFileDescriptors()
-	if err != nil {
-		return nil, trace.Wrap(err)
+	if len(cfg.FileDescriptors) != 0 {
+		cfg.FileDescriptors, err = importFileDescriptors()
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
 	}
 
 	// if there's no host uuid initialized yet, try to read one from the
@@ -376,7 +423,7 @@ func NewTeleport(cfg *Config) (*TeleportProcess, error) {
 		Config:              cfg,
 		Identities:          make(map[teleport.Role]*auth.Identity),
 		connectors:          make(map[teleport.Role]*Connector),
-		importedDescriptors: importedDescriptors,
+		importedDescriptors: cfg.FileDescriptors,
 		storage:             storage,
 	}
 
@@ -631,12 +678,14 @@ func (process *TeleportProcess) initAuthService() error {
 		return trace.Wrap(err)
 	}
 
+	process.setLocalAuth(authServer)
+
+	log.Infof("SASHA: connecto to auth service")
 	connector, err := process.connectToAuthService(teleport.RoleAdmin)
 	if err != nil {
 		return trace.Wrap(err)
 	}
-
-	process.setLocalAuth(authServer)
+	log.Infof("SASHA: connecto to auth service 2")
 
 	// second, create the API Server: it's actually a collection of API servers,
 	// each serving requests for a "role" which is assigned to every connected
@@ -863,7 +912,7 @@ func (process *TeleportProcess) newLocalCache(clt auth.ClientI, cacheName []stri
 
 // initSSH initializes the "node" role, i.e. a simple SSH server connected to the auth server.
 func (process *TeleportProcess) initSSH() error {
-	process.RegisterWithAuthServer(process.Config.Token, teleport.RoleNode, SSHIdentityEvent)
+	process.registerWithAuthServer(teleport.RoleNode, SSHIdentityEvent)
 	eventsC := make(chan Event)
 	process.WaitForEvent(SSHIdentityEvent, eventsC, make(chan struct{}))
 
@@ -973,16 +1022,10 @@ func (process *TeleportProcess) initSSH() error {
 	return nil
 }
 
-// RegisterWithAuthServer uses one time provisioning token obtained earlier
+// registerWithAuthServer uses one time provisioning token obtained earlier
 // from the server to get a pair of SSH keys signed by Auth server host
 // certificate authority
-func (process *TeleportProcess) RegisterWithAuthServer(token string, role teleport.Role, eventName string) {
-	cfg := process.Config
-	identityID := auth.IdentityID{Role: role, HostUUID: cfg.HostUUID, NodeName: cfg.Hostname}
-
-	// this means the server has not been initialized yet, we are starting
-	// the registering client that attempts to connect to the auth server
-	// and provision the keys
+func (process *TeleportProcess) registerWithAuthServer(role teleport.Role, eventName string) {
 	var authClient *auth.Client
 	process.RegisterFunc(fmt.Sprintf("register.%v", strings.ToLower(role.String())), func() error {
 		retryTime := defaults.ServerHeartbeatTTL / 3
@@ -1000,36 +1043,6 @@ func (process *TeleportProcess) RegisterWithAuthServer(token string, role telepo
 			}
 			if !trace.IsNotFound(err) {
 				return trace.Wrap(err)
-			}
-			var identity *auth.Identity
-			additionalPrincipals, err := process.getAdditionalPrincipals(role)
-			if err != nil {
-				return trace.Wrap(err)
-			}
-			//  we haven't connected yet, so we expect the token to exist
-			if process.getLocalAuth() != nil {
-				// Auth service is on the same host, no need to go though the invitation
-				// procedure
-				log.Debugf("This server has local Auth server started, using it to add role to the cluster.")
-				identity, err = auth.LocalRegister(identityID, process.getLocalAuth(), additionalPrincipals)
-			} else {
-				// Auth server is remote, so we need a provisioning token
-				if token == "" {
-					return trace.BadParameter("%v must join a cluster and needs a provisioning token", role)
-				}
-				log.Infof("Joining the cluster with a token %v.", token)
-				identity, err = auth.Register(cfg.DataDir, token, identityID, cfg.AuthServers, additionalPrincipals)
-			}
-			if err != nil {
-				log.Errorf("Failed to join the cluster: %v.", err)
-				time.Sleep(retryTime)
-			} else {
-				log.Infof("%v has successfully registered with the cluster.", role)
-				err := process.storage.WriteIdentity(auth.IdentityCurrent, *identity)
-				if err != nil {
-					log.Warningf("%v failed to write identity: %v", err)
-				}
-				continue
 			}
 		}
 	})
@@ -1180,7 +1193,7 @@ func (process *TeleportProcess) initProxy() error {
 			return trace.Wrap(err)
 		}
 	}
-	process.RegisterWithAuthServer(process.Config.Token, teleport.RoleProxy, ProxyIdentityEvent)
+	process.registerWithAuthServer(teleport.RoleProxy, ProxyIdentityEvent)
 	process.RegisterFunc("proxy.init", func() error {
 		eventsC := make(chan Event)
 		process.WaitForEvent(ProxyIdentityEvent, eventsC, make(chan struct{}))

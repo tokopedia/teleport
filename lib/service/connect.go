@@ -30,15 +30,21 @@ func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) 
 
 	state, err := process.storage.GetState(role)
 	if err != nil {
-		return nil, trace.Wrap(err)
+		if !trace.IsNotFound(err) {
+			return nil, trace.Wrap(err)
+		}
+		// no state recorded means that this is the first connect
+		// process haven't connected yet, so we expect the token to exist
+		return process.firstTimeConnect(role)
 	}
+
 	rotation := state.Spec.Rotation
 
 	switch rotation.State {
 	// rotation is on standby, so just use whatever is current
 	case "", services.RotationStateStandby:
-		// admin is a bit special, as it does not need clients
-		if role == teleport.RoleAdmin {
+		// admin and auth are a bit special, as it does not need clients
+		if role == teleport.RoleAdmin || role == teleport.RoleAuth {
 			return &Connector{
 				ClientIdentity: identity,
 				ServerIdentity: identity,
@@ -60,7 +66,7 @@ func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) 
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
-			if role == teleport.RoleAdmin {
+			if role == teleport.RoleAdmin || role == teleport.RoleAuth {
 				return &Connector{
 					ClientIdentity: newIdentity,
 					ServerIdentity: identity,
@@ -83,7 +89,7 @@ func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) 
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
-			if role == teleport.RoleAdmin {
+			if role == teleport.RoleAdmin || role == teleport.RoleAuth {
 				return &Connector{
 					ClientIdentity: newIdentity,
 					ServerIdentity: newIdentity,
@@ -104,7 +110,7 @@ func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) 
 			// to the old certificate authority-issued credentials,
 			// but new certificate authority should be trusted
 			// because not all clients can update at the same time
-			if role == teleport.RoleAdmin {
+			if role == teleport.RoleAdmin || role == teleport.RoleAuth {
 				return &Connector{
 					ClientIdentity: identity,
 					ServerIdentity: identity,
@@ -126,6 +132,80 @@ func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) 
 	default:
 		return nil, trace.BadParameter("unsupported rotation state: %q", rotation.State)
 	}
+}
+
+func (process *TeleportProcess) firstTimeConnect(role teleport.Role) (*Connector, error) {
+	id := auth.IdentityID{
+		Role:     role,
+		HostUUID: process.Config.HostUUID,
+		NodeName: process.Config.Hostname,
+	}
+	additionalPrincipals, err := process.getAdditionalPrincipals(role)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	var identity *auth.Identity
+	if process.getLocalAuth() != nil {
+		// Auth service is on the same host, no need to go though the invitation
+		// procedure
+		log.Debugf("This server has local Auth server started, using it to add role to the cluster.")
+		identity, err = auth.LocalRegister(id, process.getLocalAuth(), additionalPrincipals)
+	} else {
+		// Auth server is remote, so we need a provisioning token
+		if process.Config.Token == "" {
+			return nil, trace.BadParameter("%v must join a cluster and needs a provisioning token", role)
+		}
+		log.Infof("Joining the cluster with a token %v.", process.Config.Token)
+		identity, err = auth.Register(process.Config.DataDir, process.Config.Token, id, process.Config.AuthServers, additionalPrincipals)
+	}
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	log.Infof("%v has successfully registered with the cluster.", role)
+	var connector *Connector
+	if role == teleport.RoleAdmin || role == teleport.RoleAuth {
+		connector = &Connector{
+			ClientIdentity: identity,
+			ServerIdentity: identity,
+			AuthServer:     process.getLocalAuth(),
+		}
+	} else {
+		client, err := newClient(process.Config.AuthServers, identity)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		connector = &Connector{
+			ClientIdentity: identity,
+			ServerIdentity: identity,
+			Client:         client,
+		}
+	}
+
+	// sync local rotation state to match remote rotation state
+	ca, err := connector.GetCertAuthority(services.CertAuthID{
+		DomainName: connector.ClientIdentity.ClusterName,
+		Type:       services.HostCA,
+	}, false)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	err = process.storage.WriteIdentity(auth.IdentityCurrent, *identity)
+	if err != nil {
+		log.Warningf("%v failed to write identity: %v", err)
+	}
+
+	err = process.storage.WriteState(role, auth.StateV2{
+		Spec: auth.StateSpecV2{
+			Rotation: ca.GetRotation(),
+		},
+	})
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	log.Infof("%v has successfully wrote credentials and state to disk..", role)
+	return connector, nil
 }
 
 // periodicSyncRotationState checks rotation state periodically and

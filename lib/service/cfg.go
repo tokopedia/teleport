@@ -140,6 +140,10 @@ type Config struct {
 	// UploadEventsC is a channel for upload events
 	// used in tests
 	UploadEventsC chan *events.UploadEvent `json:"-"`
+
+	// FileDescriptors is an optional list of file descriptors for the process
+	// to inherit and use for listeners, used during in process updates
+	FileDescriptors []FileDescriptor
 }
 
 // ApplyToken assigns a given token to all internal services but only if token

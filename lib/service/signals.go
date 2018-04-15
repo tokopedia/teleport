@@ -124,6 +124,9 @@ func (process *TeleportProcess) WaitForSignals(ctx context.Context) error {
 			default:
 				log.Infof("Ignoring %q.", signal)
 			}
+		case <-process.Reloading():
+			log.Infof("Exiting signal handler: process has started internal reload.")
+			return ErrTeleportReloading
 		case <-ctx.Done():
 			process.Close()
 			process.Wait()
@@ -132,6 +135,8 @@ func (process *TeleportProcess) WaitForSignals(ctx context.Context) error {
 		}
 	}
 }
+
+var ErrTeleportReloading = trace.CompareFailed("teleport process is reloading")
 
 func (process *TeleportProcess) writeToSignalPipe(message string) error {
 	signalPipe, err := process.importSignalPipe()
@@ -248,8 +253,8 @@ func (process *TeleportProcess) createListener(listenerType, address string) (ne
 	return listener, nil
 }
 
-// exportFileDescriptors exports file descriptors to be passed to child process
-func (process *TeleportProcess) exportFileDescriptors() ([]FileDescriptor, error) {
+// ExportFileDescriptors exports file descriptors to be passed to child process
+func (process *TeleportProcess) ExportFileDescriptors() ([]FileDescriptor, error) {
 	var out []FileDescriptor
 	process.Lock()
 	defer process.Unlock()
@@ -402,7 +407,7 @@ func (process *TeleportProcess) forkChild() error {
 
 	log.Info("Forking child.")
 
-	listenerFiles, err := process.exportFileDescriptors()
+	listenerFiles, err := process.ExportFileDescriptors()
 	if err != nil {
 		return trace.Wrap(err)
 	}

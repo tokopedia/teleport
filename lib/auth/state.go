@@ -59,6 +59,22 @@ func (p *ProcessStorage) GetState(role teleport.Role) (*StateV2, error) {
 	return &res, nil
 }
 
+// CreateState creates process state if it does not exist yet
+func (p *ProcessStorage) CreateState(role teleport.Role, state StateV2) error {
+	if err := state.CheckAndSetDefaults(); err != nil {
+		return trace.Wrap(err)
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	err = p.b.CreateVal([]string{"states", strings.ToLower(role.String())}, stateName, data, backend.Forever)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
 // WriteState writes local cluster state
 func (p *ProcessStorage) WriteState(role teleport.Role, state StateV2) error {
 	if err := state.CheckAndSetDefaults(); err != nil {

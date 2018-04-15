@@ -68,6 +68,10 @@ type Supervisor interface {
 	// Exiting channel will be closed when
 	// TeleportExitEvent will be broadcasted by any caller
 	Exiting() <-chan struct{}
+
+	// Reloading channel will be closed when
+	// TeleportReloadEvent will be broadcasted by any caller
+	Reloading() <-chan struct{}
 }
 
 type LocalSupervisor struct {
@@ -86,6 +90,9 @@ type LocalSupervisor struct {
 	// exitContext is closed when someone emits Exit event
 	exitContext context.Context
 	signalExit  context.CancelFunc
+
+	reloadContext context.Context
+	signalReload  context.CancelFunc
 }
 
 // NewSupervisor returns new instance of initialized supervisor
@@ -93,6 +100,7 @@ func NewSupervisor() Supervisor {
 	closeContext, cancel := context.WithCancel(context.TODO())
 
 	exitContext, signalExit := context.WithCancel(context.TODO())
+	reloadContext, signalReload := context.WithCancel(context.TODO())
 
 	srv := &LocalSupervisor{
 		services:     []Service{},
@@ -102,8 +110,12 @@ func NewSupervisor() Supervisor {
 		eventWaiters: make(map[string][]*waiter),
 		closeContext: closeContext,
 		signalClose:  cancel,
-		exitContext:  exitContext,
-		signalExit:   signalExit,
+
+		exitContext: exitContext,
+		signalExit:  signalExit,
+
+		reloadContext: reloadContext,
+		signalReload:  signalReload,
 	}
 	go srv.fanOut()
 	return srv
@@ -219,12 +231,19 @@ func (s *LocalSupervisor) Exiting() <-chan struct{} {
 	return s.exitContext.Done()
 }
 
+func (s *LocalSupervisor) Reloading() <-chan struct{} {
+	return s.reloadContext.Done()
+}
+
 func (s *LocalSupervisor) BroadcastEvent(event Event) {
 	s.Lock()
 	defer s.Unlock()
 
-	if event.Name == TeleportExitEvent {
+	switch event.Name {
+	case TeleportExitEvent:
 		s.signalExit()
+	case TeleportReloadEvent:
+		s.signalReload()
 	}
 
 	s.events[event.Name] = event
