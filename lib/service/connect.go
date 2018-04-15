@@ -23,10 +23,6 @@ func (process *TeleportProcess) connectToAuthService(role teleport.Role) (*Conne
 }
 
 func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) {
-	identity, err := process.GetIdentity(role)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
 
 	state, err := process.storage.GetState(role)
 	if err != nil {
@@ -36,6 +32,11 @@ func (process *TeleportProcess) connect(role teleport.Role) (*Connector, error) 
 		// no state recorded means that this is the first connect
 		// process haven't connected yet, so we expect the token to exist
 		return process.firstTimeConnect(role)
+	}
+
+	identity, err := process.GetIdentity(role)
+	if err != nil {
+		return nil, trace.Wrap(err)
 	}
 
 	rotation := state.Spec.Rotation

@@ -110,8 +110,12 @@ func (p *ProcessStorage) ReadIdentity(name string, role teleport.Role) (*Identit
 // WriteIdentity writes identity to the local storage
 func (p *ProcessStorage) WriteIdentity(name string, id Identity) error {
 	res := IdentityV2{
-		Metadata: services.Metadata{
-			Name: name,
+		ResourceHeader: services.ResourceHeader{
+			Kind:    services.KindIdentity,
+			Version: services.V2,
+			Metadata: services.Metadata{
+				Name: name,
+			},
 		},
 		Spec: IdentitySpecV2{
 			Key:        id.KeyBytes,
@@ -132,12 +136,14 @@ func (p *ProcessStorage) WriteIdentity(name string, id Identity) error {
 
 // StateV2 is a local disk state
 type StateV2 struct {
-	Metadata services.Metadata
-	Spec     StateSpecV2
+	services.ResourceHeader
+	Spec StateSpecV2 `json:"spec"`
 }
 
 // CheckAndSetDefaults checks and sets defaults value for state
 func (s *StateV2) CheckAndSetDefaults() error {
+	s.Kind = services.KindState
+	s.Version = services.V2
 	// for state resource name does not matter
 	if s.Metadata.Name == "" {
 		s.Metadata.Name = stateName
@@ -155,12 +161,14 @@ type StateSpecV2 struct {
 
 // IdentityV2 specifies local host identity
 type IdentityV2 struct {
-	Metadata services.Metadata
-	Spec     IdentitySpecV2
+	services.ResourceHeader
+	Spec IdentitySpecV2 `json:"spec"`
 }
 
 // CheckAndSetDefaults checks and sets defaults value for identity
 func (s *IdentityV2) CheckAndSetDefaults() error {
+	s.Kind = services.KindIdentity
+	s.Version = services.V2
 	if err := s.Metadata.CheckAndSetDefaults(); err != nil {
 		return trace.Wrap(err)
 	}
@@ -225,5 +233,5 @@ const StateSpecV2Schema = `{
 
 // GetStateSchema returns JSON Schema for cert authorities
 func GetStateSchema() string {
-	return fmt.Sprintf(services.V2SchemaTemplate, services.MetadataSchema, StateSpecV2Schema, services.DefaultDefinitions)
+	return fmt.Sprintf(services.V2SchemaTemplate, services.MetadataSchema, fmt.Sprintf(StateSpecV2Schema, services.RotationSchema), services.DefaultDefinitions)
 }

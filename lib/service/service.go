@@ -266,14 +266,12 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 	if found {
 		return i, nil
 	}
-	log.Infof("SASHA Hear 1")
 	i, err = process.storage.ReadIdentity(auth.IdentityCurrent, role)
 	id := auth.IdentityID{
 		Role:     role,
 		HostUUID: process.Config.HostUUID,
 		NodeName: process.Config.Hostname,
 	}
-	log.Infof("SASHA Hear 2")
 	if err != nil {
 		if !trace.IsNotFound(err) {
 			return nil, trace.Wrap(err)
@@ -299,8 +297,7 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 			}
 		}
 	}
-	log.Infof("SASHA Hear 3")
-	// this information is not allways present in the certificates,
+	// this information may not be allways present in the certificates,
 	// so augment it here
 	i.ID.HostUUID = process.Config.HostUUID
 	i.ID.NodeName = process.Config.Hostname
