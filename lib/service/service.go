@@ -154,7 +154,7 @@ func (c *Connector) ReRegister(additionalPrincipals []string) (*auth.Identity, e
 }
 
 func (c *Connector) GetCertAuthority(id services.CertAuthID, loadPrivateKeys bool) (services.CertAuthority, error) {
-	if conn.ClientIdentity.Role == teleport.RoleAdmin {
+	if c.ClientIdentity.ID.Role == teleport.RoleAdmin {
 		return c.AuthServer.GetCertAuthority(id, loadPrivateKeys)
 	} else {
 		return c.Client.GetCertAuthority(id, loadPrivateKeys)
@@ -281,7 +281,11 @@ func (process *TeleportProcess) GetIdentity(role teleport.Role) (i *auth.Identit
 			// for admin identity use local auth server
 			// because admin identity is requested by auth server
 			// itself
-			i, err = auth.GenerateIdentity(process.getLocalAuth(), id)
+			principals, err := process.getAdditionalPrincipals(role)
+			if err != nil {
+				return nil, trace.Wrap(err)
+			}
+			i, err = auth.GenerateIdentity(process.getLocalAuth(), id, principals)
 		} else {
 			// try to locate static identity provided in the file
 			i, err = process.findStaticIdentity(id)
@@ -361,7 +365,7 @@ func NewTeleport(cfg *Config) (*TeleportProcess, error) {
 		}
 	}
 
-	storage, err := auth.NewProcessStorage(filepath.Join(cfg.DataDir, "process"))
+	storage, err := auth.NewProcessStorage(filepath.Join(cfg.DataDir, teleport.ComponentProcess))
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -668,7 +672,7 @@ func (process *TeleportProcess) initAuthService() error {
 	})
 
 	// Register TLS endpoint of the auth service
-	tlsConfig, err := identity.TLSConfig()
+	tlsConfig, err := connector.ServerIdentity.TLSConfig()
 	if err != nil {
 		return trace.Wrap(err)
 	}
@@ -909,7 +913,7 @@ func (process *TeleportProcess) initSSH() error {
 
 		s, err = regular.New(cfg.SSH.Addr,
 			cfg.Hostname,
-			[]ssh.Signer{conn.Identity.KeySigner},
+			[]ssh.Signer{conn.ServerIdentity.KeySigner},
 			authClient,
 			cfg.DataDir,
 			cfg.AdvertiseIP,
@@ -997,25 +1001,34 @@ func (process *TeleportProcess) RegisterWithAuthServer(token string, role telepo
 			if !trace.IsNotFound(err) {
 				return trace.Wrap(err)
 			}
+			var identity *auth.Identity
+			additionalPrincipals, err := process.getAdditionalPrincipals(role)
+			if err != nil {
+				return trace.Wrap(err)
+			}
 			//  we haven't connected yet, so we expect the token to exist
 			if process.getLocalAuth() != nil {
 				// Auth service is on the same host, no need to go though the invitation
 				// procedure
 				log.Debugf("This server has local Auth server started, using it to add role to the cluster.")
-				err = auth.LocalRegister(cfg.DataDir, identityID, process.getLocalAuth(), additionalPrincipals)
+				identity, err = auth.LocalRegister(identityID, process.getLocalAuth(), additionalPrincipals)
 			} else {
 				// Auth server is remote, so we need a provisioning token
 				if token == "" {
 					return trace.BadParameter("%v must join a cluster and needs a provisioning token", role)
 				}
 				log.Infof("Joining the cluster with a token %v.", token)
-				err = auth.Register(cfg.DataDir, token, identityID, cfg.AuthServers, additionalPrincipals)
+				identity, err = auth.Register(cfg.DataDir, token, identityID, cfg.AuthServers, additionalPrincipals)
 			}
 			if err != nil {
 				log.Errorf("Failed to join the cluster: %v.", err)
 				time.Sleep(retryTime)
 			} else {
 				log.Infof("%v has successfully registered with the cluster.", role)
+				err := process.storage.WriteIdentity(auth.IdentityCurrent, *identity)
+				if err != nil {
+					log.Warningf("%v failed to write identity: %v", err)
+				}
 				continue
 			}
 		}
@@ -1149,9 +1162,9 @@ func (process *TeleportProcess) getAdditionalPrincipals(role teleport.Role) ([]s
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
-		return []string{host}
+		return []string{host}, nil
 	}
-	return nil
+	return nil, nil
 }
 
 // initProxy gets called if teleport runs with 'proxy' role enabled.
@@ -1304,7 +1317,7 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 		return trace.Wrap(err)
 	}
 
-	tlsConfig, err := conn.Identity.TLSConfig()
+	clientTLSConfig, err := conn.ClientIdentity.TLSConfig()
 	if err != nil {
 		return trace.Wrap(err)
 	}
@@ -1316,11 +1329,11 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 
 	// Register reverse tunnel agents pool
 	agentPool, err := reversetunnel.NewAgentPool(reversetunnel.AgentPoolConfig{
-		HostUUID:    conn.Identity.ID.HostUUID,
+		HostUUID:    conn.ServerIdentity.ID.HostUUID,
 		Client:      conn.Client,
 		AccessPoint: accessPoint,
-		HostSigners: []ssh.Signer{conn.Identity.KeySigner},
-		Cluster:     conn.Identity.Cert.Extensions[utils.CertExtensionAuthority],
+		HostSigners: []ssh.Signer{conn.ServerIdentity.KeySigner},
+		Cluster:     conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
 	})
 	if err != nil {
 		return trace.Wrap(err)
@@ -1337,17 +1350,17 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 		tsrv, err = reversetunnel.NewServer(
 			reversetunnel.Config{
 				ID:                    process.Config.HostUUID,
-				ClusterName:           conn.Identity.Cert.Extensions[utils.CertExtensionAuthority],
-				ClientTLS:             tlsConfig,
+				ClusterName:           conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
+				ClientTLS:             clientTLSConfig,
 				Listener:              listeners.reverseTunnel,
-				HostSigners:           []ssh.Signer{conn.Identity.KeySigner},
+				HostSigners:           []ssh.Signer{conn.ServerIdentity.KeySigner},
 				LocalAuthClient:       conn.Client,
 				LocalAccessPoint:      accessPoint,
 				NewCachingAccessPoint: process.newLocalCache,
 				Limiter:               reverseTunnelLimiter,
 				DirectClusters: []reversetunnel.DirectCluster{
 					{
-						Name:   conn.Identity.Cert.Extensions[utils.CertExtensionAuthority],
+						Name:   conn.ServerIdentity.Cert.Extensions[utils.CertExtensionAuthority],
 						Client: conn.Client,
 					},
 				},
@@ -1425,7 +1438,7 @@ func (process *TeleportProcess) initProxyEndpoint(conn *Connector) error {
 	}
 	sshProxy, err := regular.New(cfg.Proxy.SSHAddr,
 		cfg.Hostname,
-		[]ssh.Signer{conn.Identity.KeySigner},
+		[]ssh.Signer{conn.ServerIdentity.KeySigner},
 		accessPoint,
 		cfg.DataDir,
 		nil,

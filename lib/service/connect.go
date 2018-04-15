@@ -202,6 +202,19 @@ func (process *TeleportProcess) rotate(conn *Connector, localState auth.StateV2,
 
 	const outOfSync = "%v and cluster rotation state (%v) is out of sync with local (%v). Clear local state and re-register this %v."
 
+	writeStateAndIdentity := func(identity *auth.Identity) error {
+		err = storage.WriteIdentity(auth.IdentityCurrent, *identity)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		localState.Spec.Rotation = remote
+		err = storage.WriteState(id.Role, localState)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		return nil
+	}
+
 	// now, need to evaluate what is exact difference, there are
 	// several supported scenarios, that this logic should handle
 	switch remote.State {
@@ -210,7 +223,7 @@ func (process *TeleportProcess) rotate(conn *Connector, localState auth.StateV2,
 		// great, nothing to do, it could happen
 		// that the old node came up and missed the whole rotation
 		// rollback cycle, but there is nothing we can do at this point
-		case services.RotationStateStandby:
+		case "", services.RotationStateStandby:
 			if len(additionalPrincipals) != 0 && !conn.ServerIdentity.HasPrincipals(additionalPrincipals) {
 				log.Infof("%v has updated principals to %q, going to request new principals and update")
 				identity, err := conn.ReRegister(additionalPrincipals)
@@ -236,16 +249,13 @@ func (process *TeleportProcess) rotate(conn *Connector, localState auth.StateV2,
 			if err != nil {
 				return false, trace.Wrap(err)
 			}
-			err = storage.WriteIdentity(auth.IdentityCurrent, *identity)
-			if err != nil {
-				return false, trace.Wrap(err)
-			}
-			localState.Spec.Rotation = remote
-			err = storage.WriteState(id.Role, localState)
+			err = writeStateAndIdentity(identity)
 			if err != nil {
 				return false, trace.Wrap(err)
 			}
 			return true, nil
+		default:
+			return false, trace.BadParameter("unsupported state: %q", localState)
 		}
 	case services.RotationStateInProgress:
 		switch remote.Phase {
@@ -256,32 +266,29 @@ func (process *TeleportProcess) rotate(conn *Connector, localState auth.StateV2,
 			// only allow transition in case if local rotation state is standby
 			// so this server is in the "clean" state
 			if local.State != services.RotationStateStandby {
-				return trace.CompareFailed(outOfSync, id.Role, remote, local, id.Role)
+				return false, trace.CompareFailed(outOfSync, id.Role, remote, local, id.Role)
 			}
 			identity, err := conn.ReRegister(additionalPrincipals)
 			if err != nil {
-				return nil, trace.Wrap(err)
+				return false, trace.Wrap(err)
 			}
-			err = storage.WriteIdentity(auth.IdentityReplacement, identity)
+			err = writeStateAndIdentity(identity)
 			if err != nil {
-				return trace.Wrap(err)
+				return false, trace.Wrap(err)
 			}
-			state.Spec.Rotation = remote
-			err = storage.WriteState(id.Role, state)
-			if err != nil {
-				return trace.Wrap(err)
-			}
+			// update of the servers and client requires reload of teleport process
+			return true, nil
 		case services.RotationPhaseUpdateServers:
 			// allow transition to this phase only if the previous
 			// phase was UpdateClients - as this is a happy scenario
 			// when all phases are traversed in succession
 			if local.Phase != services.RotationPhaseUpdateClients && local.CurrentID != remote.CurrentID {
-				return trace.CompareFailed(outOfSync, role, remote, local, id.Role)
+				return false, trace.CompareFailed(outOfSync, id.Role, remote, local, id.Role)
 			}
-			state.Spec.Rotation = remote
-			err = storage.WriteState(id.Role, state)
+			localState.Spec.Rotation = remote
+			err = storage.WriteState(id.Role, localState)
 			if err != nil {
-				return trace.Wrap(err)
+				return false, trace.Wrap(err)
 			}
 			// update of the servers requires reload of teleport process
 			return true, nil
@@ -292,29 +299,26 @@ func (process *TeleportProcess) rotate(conn *Connector, localState auth.StateV2,
 			// client will re-register to receive credentials signed by "old" CA
 			identity, err := conn.ReRegister(additionalPrincipals)
 			if err != nil {
-				return nil, trace.Wrap(err)
+				return false, trace.Wrap(err)
 			}
-			err = storage.WriteIdentity(auth.IdentityCurrent, identity)
+			// update of the servers requires reload of teleport process
+			err = writeStateAndIdentity(identity)
 			if err != nil {
-				return trace.Wrap(err)
-			}
-			state.Spec.Rotation = remote
-			err = storage.WriteState(id.Role, state)
-			if err != nil {
-				return trace.Wrap(err)
+				return false, trace.Wrap(err)
 			}
 			return true, nil
 		default:
 			return false, trace.BadParameter("unsupported phase: %q", remote.Phase)
 		}
+	default:
+		return false, trace.BadParameter("unsupported state: %q", remote.State)
 	}
-	return nil
 }
 
 func newClient(authServers []utils.NetAddr, identity *auth.Identity) (*auth.Client, error) {
-	tlsConfig, err := newIdentity.TLSConfig()
+	tlsConfig, err := identity.TLSConfig()
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return auth.NewTLSClient(process.Config.AuthServers, tlsConfig)
+	return auth.NewTLSClient(authServers, tlsConfig)
 }

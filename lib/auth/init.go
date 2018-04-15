@@ -692,9 +692,21 @@ func ReadSSHIdentityFromKeyPair(keyBytes, certBytes []byte) (*Identity, error) {
 	}, nil
 }
 
-// ReadIdentity reads, parses and returns the given pub/pri key + cert from the
+// ReadLocalIdentity reads, parses and returns the given pub/pri key + cert from the
 // key storage (dataDir).
-func ReadIdentity(dataDir string, id IdentityID) (i *Identity, err error) {
+func ReadLocalIdentity(dataDir string, id IdentityID) (*Identity, error) {
+	storage, err := NewProcessStorage(dataDir)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	defer storage.Close()
+	return storage.ReadIdentity(IdentityCurrent, id.Role)
+}
+
+// DELETE IN(2.7.0)
+// readIdentityCompat reads, parses and returns the given pub/pri key + cert from the
+// key storage (dataDir). Used for data migrations
+func readIdentityCompat(dataDir string, id IdentityID) (i *Identity, err error) {
 	path := keysPath(dataDir, id)
 	log.Debugf("Reading keys from disk: %v.", path)
 

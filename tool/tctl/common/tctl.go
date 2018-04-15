@@ -19,6 +19,7 @@ package common
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
@@ -133,7 +134,7 @@ func connectToAuthService(cfg *service.Config) (client auth.ClientI, err error) 
 		}
 	}
 	// read the host SSH keys and use them to open an SSH connection to the auth service
-	i, err := auth.ReadIdentity(cfg.DataDir, auth.IdentityID{Role: teleport.RoleAdmin, HostUUID: cfg.HostUUID})
+	i, err := auth.ReadLocalIdentity(filepath.Join(cfg.DataDir, teleport.ComponentProcess), auth.IdentityID{Role: teleport.RoleAdmin, HostUUID: cfg.HostUUID})
 	if err != nil {
 		// the "admin" identity is not present? this means the tctl is running NOT on the auth server.
 		if trace.IsNotFound(err) {
