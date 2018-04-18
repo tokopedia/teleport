@@ -30,7 +30,9 @@ func SendRegistrationLink(cfg *service.Config, user services.UserV1, recipient, 
 			"You or your lead has requested teleport account for you.\n"+
 			"Use this link below to complete the registration.\n"+
 			"https://%s/web/newuser/%s"+
-			"\n\nThis signup token only valid for %d hour(s)",
+			"\n\nThis signup token only valid for %d hour(s)"+
+			"\n\n---"+
+			"\nPlease read documentation first in here: https://phab.tokopedia.com/w/tech/devops/teleport/",
 		user.Name,
 		cfg.ProxyHost,
 		token,
