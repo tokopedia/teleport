@@ -88,26 +88,26 @@ func (w *sessionStreamHandler) stream(ws *websocket.Conn) error {
 		io.Copy(ioutil.Discard, ws)
 	}()
 
-	eventsCursor := -1
-	emptyEventList := make([]events.EventFields, 0)
+	//eventsCursor := -1
+	//emptyEventList := make([]events.EventFields, 0)
 
-	pollEvents := func() []events.EventFields {
-		// ask for any events than happened since the last call:
-		re, err := clt.GetSessionEvents(w.namespace, w.sessionID, eventsCursor+1, false)
-		if err != nil {
-			if !trace.IsNotFound(err) {
-				log.Error(err)
-			}
-			return emptyEventList
-		}
-		batchLen := len(re)
-		if batchLen == 0 {
-			return emptyEventList
-		}
-		// advance the cursor, so next time we'll ask for the latest:
-		eventsCursor = re[batchLen-1].GetInt(events.EventCursor)
-		return re
-	}
+	//pollEvents := func() []events.EventFields {
+	//	// ask for any events than happened since the last call:
+	//	re, err := clt.GetSessionEvents(w.namespace, w.sessionID, eventsCursor+1, false)
+	//	if err != nil {
+	//		if !trace.IsNotFound(err) {
+	//			log.Error(err)
+	//		}
+	//		return emptyEventList
+	//	}
+	//	batchLen := len(re)
+	//	if batchLen == 0 {
+	//		return emptyEventList
+	//	}
+	//	// advance the cursor, so next time we'll ask for the latest:
+	//	eventsCursor = re[batchLen-1].GetInt(events.EventCursor)
+	//	return re
+	//}
 
 	ticker := time.NewTicker(w.pollPeriod)
 	defer ticker.Stop()
@@ -123,7 +123,7 @@ func (w *sessionStreamHandler) stream(ws *websocket.Conn) error {
 			return nil
 		}
 
-		newEvents := pollEvents()
+		//newEvents := pollEvents()
 		sess, err := clt.GetSession(w.namespace, w.sessionID)
 		if err != nil {
 			if trace.IsNotFound(err) {
@@ -139,14 +139,15 @@ func (w *sessionStreamHandler) stream(ws *websocket.Conn) error {
 		if err != nil {
 			log.Error(err)
 		}
-		if len(newEvents) > 0 {
-			log.Infof("[WEB] streaming for %v. Events: %v, Nodes: %v, Parties: %v",
-				w.sessionID, len(newEvents), len(servers), len(sess.Parties))
-		}
+		//if len(newEvents) > 0 {
+		//	log.Infof("[WEB] streaming for %v. Events: %v, Nodes: %v, Parties: %v",
+		//		w.sessionID, len(newEvents), len(servers), len(sess.Parties))
+		//}
 
 		// push events to the web client
 		event := &sessionStreamEvent{
-			Events:  newEvents,
+			//Events:  newEvents,
+			Events:  []events.EventFields{},
 			Session: sess,
 			Servers: services.ServersToV1(servers),
 		}

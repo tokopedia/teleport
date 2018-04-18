@@ -21,7 +21,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	//"fmt"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
@@ -56,6 +56,7 @@ type ProxyClient struct {
 	authMethod      ssh.AuthMethod
 	siteName        string
 	clientAddr      string
+	localPTY        PTY
 }
 
 // NodeClient implements ssh client to a ssh node (teleport or any regular ssh node)
@@ -65,6 +66,7 @@ type NodeClient struct {
 	Client    *ssh.Client
 	Proxy     *ProxyClient
 
+	localPTY       PTY
 	windowChangeCh chan *ssh.Request
 }
 
@@ -430,11 +432,13 @@ func (proxy *ProxyClient) ConnectToNode(ctx context.Context, nodeAddress string,
 
 	client := ssh.NewClient(conn, chans, emptyCh)
 
+	fmt.Printf("--> ConnectToNode: %T\r\n", proxy.localPTY)
 	nc := &NodeClient{
 		Client:         client,
 		Proxy:          proxy,
 		Namespace:      defaults.Namespace,
 		windowChangeCh: make(chan *ssh.Request, 10),
+		localPTY:       proxy.localPTY,
 	}
 
 	// Start a goroutine that will run for the duration of the client to process
@@ -455,6 +459,7 @@ func (c *NodeClient) handleGlobalRequests(ctx context.Context, requestCh <-chan 
 		case r := <-requestCh:
 			switch r.Type {
 			case "x-teleport-window-change":
+				fmt.Printf("--> %T: x-teleport-window-change\n", c.localPTY)
 				c.windowChangeCh <- r
 			default:
 				// This handles keepalive messages and matches

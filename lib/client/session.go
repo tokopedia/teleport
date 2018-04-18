@@ -37,8 +37,8 @@ import (
 	"github.com/gravitational/teleport/lib/sshutils"
 	"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/trace"
-	"github.com/moby/moby/pkg/term"
 
+	"github.com/moby/moby/pkg/term"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -66,6 +66,8 @@ type NodeSession struct {
 	closer *utils.CloseBroadcaster
 
 	ExitMsg string
+
+	localPTY PTY
 }
 
 // newSession creates a new Teleport session with the given remote node
@@ -100,6 +102,7 @@ func newSession(client *NodeClient,
 		stderr:     stderr,
 		namespace:  client.Namespace,
 		closer:     utils.NewCloseBroadcaster(),
+		localPTY:   client.localPTY,
 	}
 	// if we're joining an existing session, we need to assume that session's
 	// existing/current terminal size:
@@ -321,6 +324,7 @@ func (ns *NodeSession) updateTerminalSize(s *ssh.Session) {
 			}
 		// Update and store the current window size as it comes from the remote server.
 		case r := <-ns.NodeClient().WindowChangeRequests():
+			fmt.Printf("--> window-change: %v", r.Payload)
 			var err error
 
 			parts := strings.Split(string(r.Payload), ":")
@@ -335,6 +339,7 @@ func (ns *NodeSession) updateTerminalSize(s *ssh.Session) {
 		// Buffer and update the terminal size every 2 seconds. This leads to a much
 		// nicer user experience.
 		case <-tickerCh.C:
+			fmt.Printf("--> ns.localPTY: %T\r\n", ns.localPTY)
 			// If no terminal size has been received, then wait until it has.
 			if lastParams == nil {
 				continue
@@ -342,7 +347,8 @@ func (ns *NodeSession) updateTerminalSize(s *ssh.Session) {
 
 			// Get the current size of the terminal and the last size report that was
 			// received.
-			currSize, err := term.GetWinsize(0)
+			currSize, err := ns.localPTY.GetSize()
+			//currSize, err := term.GetWinsize(0)
 			if err != nil {
 				log.Warnf("Unable to get current terminal size: %v.", err)
 				continue
@@ -355,17 +361,16 @@ func (ns *NodeSession) updateTerminalSize(s *ssh.Session) {
 			}
 
 			// This changes the size of the local PTY. This is what's drawn within the window.
-			err = term.SetWinsize(0, lastSize)
+			//err = term.SetWinsize(0, lastSize)
+			err = ns.localPTY.Redraw(lastSize)
 			if err != nil {
 				log.Warnf("Unable to update terminal size: %v.\n", err)
 				continue
 			}
 
-			go func() {
-				time.Sleep(1 * time.Second)
-				// This is what we use to resize the physical window (chrome) itself.
-				os.Stdout.Write([]byte(fmt.Sprintf("\x1b[8;%d;%dt", lastSize.Height, lastSize.Width)))
-			}()
+			// This is what we use to resize the physical window (chrome) itself.
+			ns.localPTY.SetSize(lastSize)
+			//os.Stdout.Write([]byte(fmt.Sprintf("\x1b[8;%d;%dt", lastSize.Height, lastSize.Width)))
 		case <-ns.closer.C:
 			return
 		}

@@ -25,6 +25,9 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/net/websocket"
+
 	"github.com/gravitational/teleport/lib/client"
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/services"
@@ -33,9 +36,9 @@ import (
 	"github.com/gravitational/teleport/lib/utils"
 
 	"github.com/gravitational/trace"
+
+	"github.com/moby/moby/pkg/term"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/net/websocket"
 )
 
 // TerminalRequest describes a request to crate a web-based terminal
@@ -180,6 +183,12 @@ func (t *TerminalHandler) Run(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		webPTY := client.WebPTY{
+			Conn:    ws,
+			ID:      t.params.SessionID.String(),
+			WinSize: &term.Winsize{Height: 40, Width: 80},
+		}
+
 		// create teleport client:
 		output := utils.NewWebSockWrapper(ws, utils.WebSocketTextMode)
 		clientConfig := &client.Config{
@@ -202,6 +211,7 @@ func (t *TerminalHandler) Run(w http.ResponseWriter, r *http.Request) {
 			Env:              map[string]string{sshutils.SessionEnvVar: string(t.params.SessionID)},
 			HostKeyCallback:  func(string, net.Addr, ssh.PublicKey) error { return nil },
 			ClientAddr:       r.RemoteAddr,
+			LocalPTY:         webPTY,
 		}
 		if len(t.params.InteractiveCommand) > 0 {
 			clientConfig.Interactive = true
@@ -212,6 +222,7 @@ func (t *TerminalHandler) Run(w http.ResponseWriter, r *http.Request) {
 			errToTerm(err, ws)
 			return
 		}
+
 		// this callback will execute when a shell is created, it will give
 		// us a reference to ssh.Client object
 		tc.OnShellCreated = func(s *ssh.Session, c *ssh.Client, _ io.ReadWriteCloser) (bool, error) {
@@ -225,6 +236,7 @@ func (t *TerminalHandler) Run(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
 	// this is to make sure we close web socket connections once
 	// sessionContext that owns them expires
 	t.ctx.AddClosers(t)

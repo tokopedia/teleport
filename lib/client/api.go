@@ -193,6 +193,10 @@ type Config struct {
 	// CheckVersions will check that client version is compatible
 	// with auth server version when connecting.
 	CheckVersions bool
+
+	// LocalPTY represents the local PTY of the client. It's either a native or
+	// web based PTY.
+	LocalPTY PTY
 }
 
 // CachePolicy defines cache policy for local clients
@@ -508,6 +512,7 @@ func (tc *TeleportClient) SSH(ctx context.Context, command []string, runLocally 
 		tc.ExitStatus = 1
 		return trace.Wrap(err)
 	}
+
 	// proxy local ports (forward incoming connections to remote host ports)
 	tc.startPortForwarding(nodeClient)
 
@@ -1008,6 +1013,7 @@ func (tc *TeleportClient) connectToProxy() (*ProxyClient, error) {
 			hostLogin:       tc.Config.HostLogin,
 			siteName:        tc.Config.SiteName,
 			clientAddr:      tc.ClientAddr,
+			localPTY:        tc.Config.LocalPTY,
 		}
 	}
 	successMsg := fmt.Sprintf("[CLIENT] successful auth with proxy %v", proxyAddr)

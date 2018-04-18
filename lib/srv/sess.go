@@ -264,9 +264,10 @@ func (s *SessionRegistry) NotifyWinChange(params rsession.TerminalParams, ctx *S
 	}
 
 	// Notify all members of the party that the size of the window has changed.
-	for _, p := range s.getParties(ctx) {
+	for i, p := range s.getParties(ctx) {
+		fmt.Printf("--> sending window size to %v\n", i)
 		p.sconn.SendRequest("x-teleport-window-change", false, []byte(params.Serialize()))
-		p.onWindowChanged(&params)
+		//p.onWindowChanged(&params)
 	}
 
 	// TODO(russjones): I think we can get rid of this here as well.

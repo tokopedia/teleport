@@ -651,6 +651,9 @@ func makeClient(cf *CLIConf, useProfileLogin bool) (tc *client.TeleportClient, e
 	// copy over if we want agent forwarding or not
 	c.ForwardAgent = cf.ForwardAgent
 
+	//
+	c.LocalPTY = client.NativePTY{}
+
 	return client.NewClient(c)
 }
 
