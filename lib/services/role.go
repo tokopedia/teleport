@@ -1385,8 +1385,21 @@ func MatchLabels(selector map[string]string, target map[string]string) bool {
 		return true
 	}
 	for key, val := range selector {
-		if targetVal, ok := target[key]; !ok || (val != targetVal && val != Wildcard) {
-			return false
+		if strings.Contains(val, ",") {
+			isSubValFound := false
+			for _, subVal := range strings.Split(val, ",") {
+				if targetVal, ok := target[key]; ok && (subVal == targetVal || subVal == Wildcard) {
+					isSubValFound = true
+				}
+			}
+
+			if isSubValFound == false {
+				return false
+			}
+		} else {
+			if targetVal, ok := target[key]; !ok || (val != targetVal && val != Wildcard) {
+				return false
+			}
 		}
 	}
 	return true
