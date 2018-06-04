@@ -1341,7 +1341,16 @@ func (h *Handler) siteNodesGet(w http.ResponseWriter, r *http.Request, p httprou
 		return nil, trace.Wrap(err)
 	}
 
-	uiServers := ui.MakeServers(site.GetName(), servers)
+	filteredServers := make([]services.Server, 0)
+
+	for _, s := range servers {
+		err = services.RoleSet(c.userRoles).CheckAccessToServer("root", s)
+		if err == nil {
+			filteredServers = append(filteredServers, s)
+		}
+	}
+
+	uiServers := ui.MakeServers(site.GetName(), filteredServers)
 	return makeResponse(uiServers)
 }
 

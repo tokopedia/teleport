@@ -59,6 +59,7 @@ type SessionContext struct {
 	parent    *sessionCache
 	closers   []io.Closer
 	tc        *client.TeleportClient
+	userRoles []services.Role
 }
 
 func (c *SessionContext) AddClosers(closers ...io.Closer) {
@@ -628,12 +629,20 @@ func (s *sessionCache) ValidateSession(user, sid string) (*SessionContext, error
 		return nil, trace.Wrap(err)
 	}
 
+	userRoles := make([]services.Role, 0)
+	userObj, _ := userClient.GetUser(user)
+	for _, role := range userObj.GetRoles() {
+		roleObj, _ := userClient.GetRole(role)
+		userRoles = append(userRoles, roleObj)
+	}
+
 	c := &SessionContext{
 		clt:       userClient,
 		remoteClt: make(map[string]auth.ClientI),
 		user:      user,
 		sess:      sess,
 		parent:    s,
+		userRoles: userRoles,
 	}
 	c.Entry = log.WithFields(log.Fields{
 		"user": user,
