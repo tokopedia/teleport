@@ -74,7 +74,7 @@ func (u *RoleCommand) Initialize(app *kingpin.Application, config *service.Confi
 }
 
 // TryRun takes the CLI command as an argument (like "roles add") and executes it.
-func (u *RoleCommand) TryRun(cmd string, client *auth.TunClient) (match bool, err error) {
+func (u *RoleCommand) TryRun(cmd string, client auth.ClientI) (match bool, err error) {
 	switch cmd {
 	case u.roleAdd.FullCommand():
 		err = u.Add(client)
