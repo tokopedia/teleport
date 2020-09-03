@@ -87,7 +87,7 @@ const (
 
 	// ReadHeadersTimeout is a default TCP timeout when we wait
 	// for the response headers to arrive
-	ReadHeadersTimeout = time.Second
+	ReadHeadersTimeout = 30 * time.Second
 
 	// SignupTokenTTL is a default TTL for a web signup one time token
 	SignupTokenTTL = 24 * time.Hour
