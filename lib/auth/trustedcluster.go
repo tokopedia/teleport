@@ -320,6 +320,7 @@ func (s *AuthServer) sendValidateRequestToProxy(host string, validateRequest *Va
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
 		insecureWebClient := &http.Client{
+			Timeout: 30 * time.Second,
 			Transport: tr,
 		}
 		opts = append(opts, roundtrip.HTTPClient(insecureWebClient))
