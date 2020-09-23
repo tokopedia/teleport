@@ -33,7 +33,7 @@ import (
 
 func NewInsecureWebClient() *http.Client {
 	return &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 90 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
@@ -42,7 +42,7 @@ func NewInsecureWebClient() *http.Client {
 
 func newClientWithPool(pool *x509.CertPool) *http.Client {
 	return &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 90 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{RootCAs: pool},
 		},

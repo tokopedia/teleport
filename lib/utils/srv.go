@@ -25,8 +25,8 @@ import (
 func StartHTTPServer(addr NetAddr, h http.Handler) error {
 	if addr.AddrNetwork == "tcp" {
 		hsrv := &http.Server{
-			ReadTimeout:  20 * time.Second,
-			WriteTimeout: 30 * time.Second,
+			ReadTimeout:  90 * time.Second,
+			WriteTimeout: 90 * time.Second,
 			IdleTimeout:  120 * time.Second,
 			Addr:    addr.Addr,
 			Handler: h,
@@ -38,8 +38,8 @@ func StartHTTPServer(addr NetAddr, h http.Handler) error {
 		return err
 	}
 	hsrv := &http.Server{
-		ReadTimeout:  20 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  90 * time.Second,
+		WriteTimeout: 90 * time.Second,
 		IdleTimeout:  120 * time.Second,
 		Handler: h,
 	}

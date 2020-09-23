@@ -84,7 +84,7 @@ func NewClient(addr string, dialer Dialer, params ...roundtrip.ClientParam) (*Cl
 	}
 	params = append(params,
 		roundtrip.HTTPClient(&http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 90 * time.Second,
 			Transport: transport,
 		}),
 		// TODO (ekontsevoy) this tracer pollutes the logs making it harder to work

@@ -73,10 +73,10 @@ const (
 
 	// DefaultDialTimeout is a default TCP dial timeout we set for our
 	// connection attempts
-	DefaultDialTimeout = 30 * time.Second
+	DefaultDialTimeout = 90 * time.Second
 
 	// HTTPIdleTimeout is a default timeout for idle HTTP connections
-	HTTPIdleTimeout = 30 * time.Second
+	HTTPIdleTimeout = 90 * time.Second
 
 	// DefaultThrottleTimeout is a timemout used to throttle failed auth servers
 	DefaultThrottleTimeout = 10 * time.Second
@@ -87,7 +87,7 @@ const (
 
 	// ReadHeadersTimeout is a default TCP timeout when we wait
 	// for the response headers to arrive
-	ReadHeadersTimeout = 30 * time.Second
+	ReadHeadersTimeout = 90 * time.Second
 
 	// SignupTokenTTL is a default TTL for a web signup one time token
 	SignupTokenTTL = 24 * time.Hour
